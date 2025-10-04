@@ -1,0 +1,27 @@
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  application:
+    name: goodface-interview
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  redis:
+    host: ${SPRING_REDIS_HOST:127.0.0.1}
+    port: ${SPRING_REDIS_PORT:6379}
+
+dubbo:
+  application:
+    name: goodface-interview
+  protocol:
+    name: dubbo
+  registry:
+    address: ${DUBBO_REGISTRY_ADDRESS:nacos://127.0.0.1:8848}
+    check: false
+  config-center:
+    check: false
+
+logging:
+  level:
+    root: INFO
+    org.apache.dubbo: INFO
