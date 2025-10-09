@@ -29,6 +29,7 @@ public class AudioStreamWebSocketHandler {
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private SttClient sttClient;
     private LlmClient llmClient;
+    private boolean llmStreamingEnabled = true;
 
     @OnOpen
     public void onOpen(Session session) {
@@ -66,6 +67,7 @@ public class AudioStreamWebSocketHandler {
             llmClient = new AliyunLlmClient(); // 暂用同实现作为默认
         }
         llmClient.init(llmApiKey, llmModel, llmTemperature, llmTopP, llmMaxTokens, llmStreaming);
+        this.llmStreamingEnabled = llmStreaming;
 
         final boolean[] sttFailed = { false };
         sttClient.startSession(sessionId,
@@ -90,10 +92,43 @@ public class AudioStreamWebSocketHandler {
                                 try { sendJson(session, Map.of("type", "question", "content", question)); }
                                 catch (IOException e) { log.warn("send question failed", e); }
                             }
-                            String answer = llmClient.generateAnswer(question != null ? question : fin, "");
-                            if (answer != null && !answer.isEmpty()) {
-                                try { sendJson(session, Map.of("type", "answer", "content", answer)); }
-                                catch (IOException e) { log.warn("send answer failed", e); }
+                            if (llmStreamingEnabled) {
+                                llmClient.generateAnswerStream(
+                                        question != null ? question : fin,
+                                        "",
+                                        delta -> {
+                                            try {
+                                                log.info("WS push answer delta: len={} preview=\"{}\"",
+                                                        delta == null ? 0 : delta.length(), preview(delta, 100));
+                                                log.debug("WS push answer delta content: {}", delta);
+                                                sendJson(session, Map.of("type", "answer", "content", delta));
+                                            }
+                                            catch (IOException e) { log.warn("send answer delta failed", e); }
+                                        },
+                                        () -> {
+                                            try {
+                                                log.info("WS push answer complete: send [END]");
+                                                sendJson(session, Map.of("type", "answer", "content", "[END]"));
+                                            }
+                                            catch (IOException e) { log.warn("send answer end failed", e); }
+                                        },
+                                        ex -> {
+                                            log.warn("LLM streaming error: {}", ex.getMessage(), ex);
+                                            try { sendJson(session, Map.of("type", "error", "code", "LLM_ERROR", "message", ex.getMessage())); }
+                                            catch (IOException ignored) {}
+                                        }
+                                );
+                            } else {
+                                String answer = llmClient.generateAnswer(question != null ? question : fin, "");
+                                if (answer != null && !answer.isEmpty()) {
+                                    try {
+                                        log.info("WS push answer full: len={} preview=\"{}\"",
+                                                answer.length(), preview(answer, 120));
+                                        log.debug("WS push answer full content: {}", answer);
+                                        sendJson(session, Map.of("type", "answer", "content", answer));
+                                    }
+                                    catch (IOException e) { log.warn("send answer failed", e); }
+                                }
                             }
                         } catch (Exception ex) {
                             log.warn("LLM processing failed", ex);
@@ -124,7 +159,7 @@ public class AudioStreamWebSocketHandler {
 
     @OnMessage
     public void onBinaryMessage(ByteBuffer message, Session session) {
-        log.debug("Received audio chunk, bytes={}", message.remaining());
+        log.trace("Received audio chunk, bytes={}", message.remaining());
         byte[] bytes = new byte[message.remaining()];
         message.get(bytes);
         sttClient.sendAudio(bytes);
@@ -132,7 +167,7 @@ public class AudioStreamWebSocketHandler {
 
     @OnMessage
     public void onTextMessage(String text, Session session) {
-        log.debug("Received text: {}", text);
+        log.trace("Received text: {}", text);
         // 控制帧示例：{"type":"control","action":"end"}
         // 可根据需要扩展暂停/恢复等
     }
@@ -192,4 +227,11 @@ public class AudioStreamWebSocketHandler {
             session.getBasicRemote().sendText(json);
         }
     }
+
+    private String preview(String s, int max) {
+        if (s == null) return "";
+        String t = s.replaceAll("\n", " ");
+        return t.length() <= max ? t : t.substring(0, max) + "...";
+    }
+
 }
