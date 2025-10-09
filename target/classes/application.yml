@@ -1,5 +1,5 @@
 server:
-  port: ${SERVER_PORT:8081}
+  port: ${SERVER_PORT:8003}
 
 spring:
   application:
@@ -13,8 +13,11 @@ spring:
 dubbo:
   application:
     name: goodface-interview
+    qos-enable: true
+    qos-port: 22222
   protocol:
     name: dubbo
+    port: 20882
   registry:
     address: ${DUBBO_REGISTRY_ADDRESS:nacos://127.0.0.1:8848}
     check: false
@@ -25,3 +28,20 @@ logging:
   level:
     root: INFO
     org.apache.dubbo: INFO
+    com.deepknow.goodface: DEBUG
+
+stt:
+  provider: aliyun
+  apiKeyEnv: DASHSCOPE_API_KEY
+  # 如果已在环境变量中设置 DASHSCOPE_API_KEY，会自动读取；也可直接配置：
+  apiKey: ${DASHSCOPE_API_KEY:sk-7d4518e436ff4a8ebf74044740e00b3b}
+  model: gummy-realtime-v1
+  sampleRate: 16000
+  language: zh-CN
+
+llm:
+  provider: aliyun
+  apiKeyEnv: DASHSCOPE_API_KEY
+  # 同上，可直接配置：
+  apiKey: ${DASHSCOPE_API_KEY:sk-7d4518e436ff4a8ebf74044740e00b3b}
+  model: qwen-turbo
