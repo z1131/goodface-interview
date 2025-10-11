@@ -1,0 +1,61 @@
+server:
+  port: ${SERVER_PORT:8003}
+
+spring:
+  application:
+    name: goodface-interview
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  redis:
+    host: ${SPRING_REDIS_HOST:127.0.0.1}
+    port: ${SPRING_REDIS_PORT:6379}
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://127.0.0.1:3306/goodface?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:123456}
+
+mybatis:
+  mapper-locations: classpath*:/mappers/**/*.xml
+
+dubbo:
+  application:
+    name: goodface-interview
+    qos-enable: true
+    qos-port: 22222
+  protocol:
+    name: dubbo
+    port: 20882
+  registry:
+    address: ${DUBBO_REGISTRY_ADDRESS:nacos://127.0.0.1:8848}
+    check: false
+  config-center:
+    check: false
+  scan:
+    base-packages: com.deepknow.goodface.interview.service
+
+logging:
+  level:
+    root: INFO
+    org.apache.dubbo: INFO
+    com.deepknow.goodface: DEBUG
+
+stt:
+  provider: aliyun
+  apiKeyEnv: DASHSCOPE_API_KEY
+  # 如果已在环境变量中设置 DASHSCOPE_API_KEY，会自动读取；也可直接配置：
+  apiKey: ${DASHSCOPE_API_KEY:sk-7d4518e436ff4a8ebf74044740e00b3b}
+  model: gummy-realtime-v1
+  sampleRate: 16000
+  language: zh-CN
+
+llm:
+  provider: aliyun
+  apiKeyEnv: DASHSCOPE_API_KEY
+  # 同上，可直接配置：
+  apiKey: ${DASHSCOPE_API_KEY:sk-7d4518e436ff4a8ebf74044740e00b3b}
+  model: qwen-turbo
+
+# 运行时开关：无数据库环境下禁用 MyBatis 与依赖服务
+app:
+  db:
+    enabled: true
