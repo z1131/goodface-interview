@@ -59,3 +59,20 @@ llm:
 app:
   db:
     enabled: true
+
+models:
+  available:
+    - id: qwen-turbo
+      name: qwen-turbo
+      tier: basic
+      provider: aliyun
+      llmModel: qwen-turbo
+      requiresAuth: false
+      description: 响应速度快
+    - id: qwen-plus
+      name: qwen-plus
+      tier: premium
+      provider: aliyun
+      llmModel: qwen-plus
+      requiresAuth: true
+      description: 更高质量输出
