@@ -10,6 +10,7 @@ public interface AudioStreamService {
     void open(String wsSessionId, String sessionId,
               Consumer<String> onSttPartial,
               Consumer<String> onSttFinal,
+              Consumer<String> onQuestion,
               Consumer<String> onAnswerDelta,
               Runnable onAnswerComplete,
               Consumer<Throwable> onError,

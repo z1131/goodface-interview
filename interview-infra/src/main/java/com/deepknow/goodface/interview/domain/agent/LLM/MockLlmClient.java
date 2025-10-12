@@ -27,11 +27,15 @@ public class MockLlmClient implements LlmClient {
     }
 
     @Override
-    public String extractQuestion(String text) {
+    public String extractQuestion(String text, String context) {
         if (text == null || text.isEmpty()) return null;
-        // 简单规则：返回最后一句作为“问题”
-        String[] parts = text.split("[。？！?！]\n?");
+        // 简单规则：返回最后一句作为“问题”；若上下文包含该问题则返回“无问题”
+        String[] parts = text.split("[。？！?！]\\n?");
         String q = parts[parts.length - 1].trim();
+        if (context != null && !context.isEmpty() && q.length() > 0 && context.contains(q)) {
+            log.info("Mock LLM extractQuestion: 命中上下文，输出无问题");
+            return "无问题";
+        }
         log.info("Mock LLM extractQuestion: {}", preview(q, 80));
         return q.isEmpty() ? text : q;
     }

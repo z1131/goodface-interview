@@ -12,6 +12,7 @@ public interface InterviewAgent extends AutoCloseable {
     void start(com.deepknow.goodface.interview.domain.session.model.SessionContext ctx,
                Consumer<String> onSttPartial,
                Consumer<String> onSttFinal,
+               Consumer<String> onQuestion,
                Consumer<String> onAnswerDelta,
                Runnable onAnswerComplete,
                Consumer<Throwable> onError,

@@ -19,6 +19,10 @@ public class DefaultInterviewAgent implements InterviewAgent {
     private SttClient sttClient;
     private LlmClient llmClient;
     private boolean llmStreamingEnabled = true;
+    private String lastQuestion;
+    private java.util.ArrayDeque<String> recentQuestions;
+    private int contextWindowSize = 3;
+    private String userPrompt;
 
     public DefaultInterviewAgent(AgentFactory factory) {
         this.factory = factory;
@@ -28,6 +32,7 @@ public class DefaultInterviewAgent implements InterviewAgent {
     public void start(com.deepknow.goodface.interview.domain.session.model.SessionContext ctx,
                       Consumer<String> onSttPartial,
                       Consumer<String> onSttFinal,
+                      Consumer<String> onQuestion,
                       Consumer<String> onAnswerDelta,
                       Runnable onAnswerComplete,
                       Consumer<Throwable> onError,
@@ -55,6 +60,13 @@ public class DefaultInterviewAgent implements InterviewAgent {
         llmClient.init(llmApiKey, llmModel, llmTemperature, llmTopP, llmMaxTokens, llmStreaming);
         this.llmStreamingEnabled = llmStreaming;
 
+        // 初始化上下文窗口（最近几轮问题）
+        this.contextWindowSize = getInt(cfg, "context.windowSize", 3);
+        if (this.contextWindowSize < 1) this.contextWindowSize = 1;
+        this.recentQuestions = new java.util.ArrayDeque<>(this.contextWindowSize);
+        // 读取用户填写的提示词（来自 Portal 创建会话时的配置）
+        this.userPrompt = getString(cfg, "prompt", "");
+
         final boolean[] sttFailed = { false };
         sttClient.startSession(ctx.getSessionId(),
                 partial -> { if (onSttPartial != null) onSttPartial.accept(partial); },
@@ -63,17 +75,28 @@ public class DefaultInterviewAgent implements InterviewAgent {
                     // 触发 LLM 处理
                     scheduler.execute(() -> {
                         try {
-                            String question = llmClient.extractQuestion(fin);
+                            String question = llmClient.extractQuestion(fin, buildContextString());
+                            // 将识别出的新问题推送到上层，避免重复
+                            String normQ = normalize(question);
+                            String normLast = normalize(lastQuestion);
+                            // 过滤无问题信号
+                            boolean isNoQuestion = question != null && "无问题".equals(question.trim());
+                            if (!isNoQuestion && normQ != null && !normQ.isEmpty() && !normQ.equals(normLast)) {
+                                lastQuestion = question;
+                                // 维护最近问题窗口
+                                addRecentQuestion(normQ);
+                                if (onQuestion != null) onQuestion.accept(question);
+                            }
                             if (llmStreamingEnabled) {
                                 llmClient.generateAnswerStream(
                                         question != null ? question : fin,
-                                        "",
+                                        buildContextString(),
                                         delta -> { if (onAnswerDelta != null) onAnswerDelta.accept(delta); },
                                         () -> { if (onAnswerComplete != null) onAnswerComplete.run(); },
                                         ex -> { if (onError != null) onError.accept(ex); }
                                 );
                             } else {
-                                String answer = llmClient.generateAnswer(question != null ? question : fin, "");
+                                String answer = llmClient.generateAnswer(question != null ? question : fin, buildContextString());
                                 if (onAnswerDelta != null && answer != null) onAnswerDelta.accept(answer);
                                 if (onAnswerComplete != null) onAnswerComplete.run();
                             }
@@ -133,6 +156,33 @@ public class DefaultInterviewAgent implements InterviewAgent {
         try { return Integer.parseInt(String.valueOf(v)); } catch (Exception e) { return def; }
     }
 
+    private void addRecentQuestion(String q) {
+        if (q == null || q.isEmpty()) return;
+        // 避免重复相邻问题
+        String last = recentQuestions.peekLast();
+        if (last != null && last.equals(q)) return;
+        if (recentQuestions.size() >= contextWindowSize) {
+            recentQuestions.pollFirst();
+        }
+        recentQuestions.offerLast(q);
+    }
+
+    private String buildContextString() {
+        if (recentQuestions == null || recentQuestions.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder(256);
+        if (userPrompt != null && !userPrompt.isEmpty()) {
+            sb.append("用户提示词：").append(userPrompt).append("\n");
+        }
+        sb.append("最近问题：");
+        boolean first = true;
+        for (String q : recentQuestions) {
+            if (!first) sb.append(" | ");
+            sb.append(q);
+            first = false;
+        }
+        return sb.toString();
+    }
+
     private double getDouble(java.util.Map<String, Object> cfg, String key, double def) {
         if (cfg == null) return def;
         Object v = cfg.get(key);
@@ -145,5 +195,15 @@ public class DefaultInterviewAgent implements InterviewAgent {
         Object v = cfg.get(key);
         if (v == null) return def;
         try { return Boolean.parseBoolean(String.valueOf(v)); } catch (Exception e) { return def; }
+    }
+
+    private String normalize(String s) {
+        if (s == null) return null;
+        String t = s.trim();
+        // 简单去噪：去除中文/英文标点与多空格
+        t = t.replaceAll("[\n\r]", " ");
+        t = t.replaceAll("[，。！？、；：:,.!?]", "");
+        t = t.replaceAll("\\s+", " ");
+        return t.toLowerCase();
     }
 }

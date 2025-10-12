@@ -35,12 +35,17 @@ public class AudioStreamWebSocketHandler {
                 session.getId(),
                 sessionId,
                 partial -> {
-                    try { sendJson(session, Map.of("type", "stt_partial", "content", partial)); }
-                    catch (IOException e) { log.warn("Failed to send partial", e); }
+                    // 不再向前端推送 STT 局部文本，避免误导 UI
                 },
                 fin -> {
-                    try { sendJson(session, Map.of("type", "stt_final", "content", fin)); }
-                    catch (IOException e) { log.warn("Failed to send final", e); }
+                    // 不再向前端推送 STT 最终文本，由 LLM 识别问题后再推送
+                },
+                q -> {
+                    try {
+                        log.info("WS push question: len={} preview=\"{}\"",
+                                q == null ? 0 : q.length(), preview(q, 120));
+                        sendJson(session, Map.of("type", "question", "content", q));
+                    } catch (IOException e) { log.warn("send question failed", e); }
                 },
                 delta -> {
                     try {

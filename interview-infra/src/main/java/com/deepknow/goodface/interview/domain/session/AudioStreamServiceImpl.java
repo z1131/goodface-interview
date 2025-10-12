@@ -42,6 +42,7 @@ public class AudioStreamServiceImpl implements AudioStreamService {
     public void open(String wsSessionId, String sessionId,
                      Consumer<String> onSttPartial,
                      Consumer<String> onSttFinal,
+                     Consumer<String> onQuestion,
                      Consumer<String> onAnswerDelta,
                      Runnable onAnswerComplete,
                      Consumer<Throwable> onError,
@@ -92,6 +93,7 @@ public class AudioStreamServiceImpl implements AudioStreamService {
                         log.warn("Persist user message failed", e);
                     }
                 },
+                onQuestion,
                 delta -> {
                     synchronized (buf) { buf.append(delta == null ? "" : delta); }
                     if (onAnswerDelta != null) onAnswerDelta.accept(delta);

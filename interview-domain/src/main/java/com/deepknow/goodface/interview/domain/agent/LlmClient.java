@@ -2,7 +2,7 @@ package com.deepknow.goodface.interview.domain.agent;
 
 public interface LlmClient extends AutoCloseable {
     void init(String apiKey, String model, double temperature, double topP, int maxTokens, boolean streaming);
-    String extractQuestion(String text);
+    String extractQuestion(String text, String context);
     String generateAnswer(String question, String context);
     /**
      * 直接使用LLM的流式输出，将增量片段通过回调返回。

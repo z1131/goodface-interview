@@ -47,30 +47,36 @@ public class AliyunLlmClient implements LlmClient {
                 model, temperature, topP, maxTokens, streaming);
     }
 
-    @Override
-    public String extractQuestion(String text) {
-        try {
-            log.info("LLM extractQuestion start: textLen={}", text == null ? 0 : text.length());
-            String system = "你是一个面试问题提取器，输入的文本为实时录音转文字识别出来的文本内容，识别内容为面试对话并且可能会有偏差，请你识别出其中面试官提出的问题。";
-            String prompt = "输入：" + text + "\n输出：";
-            JsonNode resp = call(model, system, prompt);
-            String result = pickText(resp);
-            log.info("LLM extractQuestion done: resultLen={} preview=\"{}\"",
-                    result == null ? 0 : result.length(), preview(result, 80));
-            log.debug("LLM extractQuestion content: {}", result);
-            return result;
-        } catch (Exception e) {
-            log.warn("extractQuestion failed", e);
-            return null;
+
+        @Override
+        public String extractQuestion(String text, String context) {
+            try {
+                log.info("LLM extractQuestion start: textLen={}", text == null ? 0 : text.length());
+                String system = "你是一名严谨的面试问题提取器。基于候选人与面试官的中文对话转写文本，" +
+                        "在存在识别误差的情况下也要尽量还原面试官的真实提问。只有当识别出的提问与最近几轮问题不同，才输出新问题；否则严格输出‘无问题’。" +
+                        "当你判断不够确定时，最多给出3个候选问题（越确定越靠前）。输出必须为以下两种之一：\n" +
+                        "1）‘无问题’\n2）按‘问题1:xxx；问题2:yyy；问题3:zzz’的中文格式给出1～3个问题（至少1个）。";
+                String prompt = "输入：" + text +
+                        "\n用户提示词与最近问题上下文：" + safe(context) +
+                        "\n请按上述格式输出：";
+                JsonNode resp = call(model, system, prompt);
+                String result = pickText(resp);
+                log.info("LLM extractQuestion done: resultLen={} preview=\"{}\"",
+                        result == null ? 0 : result.length(), preview(result, 80));
+                log.debug("LLM extractQuestion content: {}", result);
+                return result;
+            } catch (Exception e) {
+                log.warn("extractQuestion failed", e);
+                return null;
+            }
         }
-    }
 
     @Override
     public String generateAnswer(String question, String context) {
         try {
             log.info("LLM generateAnswer start: qLen={} ctxLen={}",
                     question == null ? 0 : question.length(), context == null ? 0 : context.length());
-            String system = "你是面试候选人助手，基于提供的背景与岗位需求，生成简洁、具体、专业的中文回答，避免虚构事实。";
+            String system = "你是面试候选人助手，基于提供的背景与岗位需求，生成简洁、具体、专业的中文回答，避免虚构事实。你只需回答当前的问题，上下文当作参考，因为当前的问题可能是上下文的延伸";
             String prompt = "问题：" + safe(question) + "\n上下文：" + safe(context) + "\n请直接给出答案：";
             JsonNode resp = call(model, system, prompt);
             String result = pickText(resp);
