@@ -54,8 +54,8 @@ public class AliyunLlmClient implements LlmClient {
                 log.info("LLM extractQuestion start: textLen={}", text == null ? 0 : text.length());
                 String system = "你是一名严谨的面试问题提取器。基于候选人与面试官的中文对话转写文本，" +
                         "在存在识别误差的情况下也要尽量还原面试官的真实提问。只有当识别出的提问与最近几轮问题不同，才输出新问题；否则严格输出‘无问题’。" +
-                        "当你判断不够确定时，最多给出3个候选问题（越确定越靠前）。输出必须为以下两种之一：\n" +
-                        "1）‘无问题’\n2）按‘问题1:xxx；问题2:yyy；问题3:zzz’的中文格式给出1～3个问题（至少1个）。";
+                        "输出必须为以下两种之一：\n" +
+                        "1）‘无问题’\n2）按‘问题:xxx’的中文格式给出个问题。";
                 String prompt = "输入：" + text +
                         "\n用户提示词与最近问题上下文：" + safe(context) +
                         "\n请按上述格式输出：";

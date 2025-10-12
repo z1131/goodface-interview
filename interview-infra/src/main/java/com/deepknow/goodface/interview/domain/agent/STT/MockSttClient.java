@@ -26,11 +26,14 @@ public class MockSttClient implements SttClient {
     }
 
     @Override
-    public void startSession(String sessionId, Consumer<String> onPartial, Consumer<String> onFinal, Consumer<Throwable> onError) {
+    public void startSession(String sessionId, Consumer<String> onPartial, Consumer<String> onFinal, Consumer<Throwable> onError, Runnable onReady) {
         this.onPartial = onPartial;
         this.onFinal = onFinal;
         this.onError = onError;
         log.info("Mock STT session started: {}", sessionId);
+        if (onReady != null) {
+            try { onReady.run(); } catch (Exception e) { log.warn("Mock onReady failed", e); }
+        }
         // 演示：稍后推送一条 partial 和一条 final 文本
         scheduler.schedule(() -> { if (this.onPartial != null) this.onPartial.accept("[mock] 正在识别..."); }, 300, TimeUnit.MILLISECONDS);
         scheduler.schedule(() -> { if (this.onFinal != null) this.onFinal.accept("[mock] 这是模拟的最终识别文本"); }, 1000, TimeUnit.MILLISECONDS);

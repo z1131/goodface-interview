@@ -59,7 +59,7 @@ public class AliyunSttClient implements SttClient {
     }
 
     @Override
-    public void startSession(String sessionId, Consumer<String> onPartial, Consumer<String> onFinal, Consumer<Throwable> onError) {
+    public void startSession(String sessionId, Consumer<String> onPartial, Consumer<String> onFinal, Consumer<Throwable> onError, Runnable onReady) {
         this.onPartial = onPartial;
         this.onFinal = onFinal;
         this.onError = onError;
@@ -99,28 +99,21 @@ public class AliyunSttClient implements SttClient {
                 }
             };
             translator.call(param, callback);
-            log.info("Aliyun STT session starting");
-            // 简单就绪延时：避免在连接未建立时发送音频导致 idle 错误
-            new Thread(() -> {
+            log.info("Aliyun STT session started");
+            // 使用官方 SDK 的实时识别（含 VAD 断句），连接建立后即视为就绪
+            ready = true;
+            if (onReady != null) {
+                try { onReady.run(); } catch (Exception e) { log.warn("Emit onReady failed", e); }
+            }
+            // 将缓冲的音频帧依次发送
+            byte[] buf;
+            while ((buf = pending.poll()) != null) {
                 try {
-                    Thread.sleep(300);
-                } catch (InterruptedException ignored) {}
-                if (startupFailed) {
-                    log.warn("Aliyun STT startup failed; skip ready signal and draining");
-                    return;
+                    translator.sendAudioFrame(ByteBuffer.wrap(buf));
+                } catch (Exception e) {
+                    log.warn("Drain buffered frame failed", e);
                 }
-                ready = true;
-                log.info("Aliyun STT ready; draining {} buffered frames", pending.size());
-                // 将缓冲的音频帧依次发送
-                byte[] buf;
-                while ((buf = pending.poll()) != null) {
-                    try {
-                        translator.sendAudioFrame(ByteBuffer.wrap(buf));
-                    } catch (Exception e) {
-                        log.warn("Drain buffered frame failed", e);
-                    }
-                }
-            }, "stt-ready-delay").start();
+            }
         } catch (Exception e) {
             log.error("Start Aliyun STT session failed", e);
             if (this.onError != null) this.onError.accept(e);

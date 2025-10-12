@@ -16,6 +16,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 @Service
@@ -29,6 +34,8 @@ public class AudioStreamServiceImpl implements AudioStreamService {
     private final InterviewSessionMapper sessionMapper;
     private final InterviewMessageMapper messageMapper;
     private final ObjectMapper objectMapper;
+    // 异步持久化线程池（有界队列，避免阻塞主链路）
+    private final ExecutorService persistExecutor;
 
     public AudioStreamServiceImpl(InterviewSessionMapper sessionMapper,
                                   InterviewMessageMapper messageMapper,
@@ -36,6 +43,18 @@ public class AudioStreamServiceImpl implements AudioStreamService {
         this.sessionMapper = sessionMapper;
         this.messageMapper = messageMapper;
         this.objectMapper = objectMapper;
+        // 初始化持久化线程池：核心2，最大4，队列200；拒绝时直接丢弃并记录日志
+        ThreadFactory tf = r -> {
+            Thread t = new Thread(r, "persist-exec");
+            t.setDaemon(true);
+            return t;
+        };
+        this.persistExecutor = new ThreadPoolExecutor(
+                2, 4, 60, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(200),
+                tf,
+                (r, exec) -> log.warn("Persist queue full, dropping task")
+        );
     }
 
     @Override
@@ -82,16 +101,19 @@ public class AudioStreamServiceImpl implements AudioStreamService {
                 onSttPartial,
                 fin -> {
                     if (onSttFinal != null) onSttFinal.accept(fin);
-                    try {
-                        InterviewMessage msg = new InterviewMessage();
-                        msg.setSessionId(session.getId());
-                        msg.setRole("user");
-                        msg.setContent(fin);
-                        msg.setCreatedAt(java.time.LocalDateTime.now());
-                        messageMapper.insert(msg);
-                    } catch (Exception e) {
-                        log.warn("Persist user message failed", e);
-                    }
+                    // 异步持久化用户消息，避免阻塞回调链路
+                    persistExecutor.execute(() -> {
+                        try {
+                            InterviewMessage msg = new InterviewMessage();
+                            msg.setSessionId(session.getId());
+                            msg.setRole("user");
+                            msg.setContent(fin);
+                            msg.setCreatedAt(java.time.LocalDateTime.now());
+                            messageMapper.insert(msg);
+                        } catch (Exception e) {
+                            log.warn("Persist user message failed", e);
+                        }
+                    });
                 },
                 onQuestion,
                 delta -> {
@@ -102,20 +124,25 @@ public class AudioStreamServiceImpl implements AudioStreamService {
                     // 持久化 assistant 完整答案
                     String content;
                     synchronized (buf) { content = buf.toString(); }
-                    try {
-                        if (content != null && !content.isEmpty()) {
-                            InterviewMessage msg = new InterviewMessage();
-                            msg.setSessionId(session.getId());
-                            msg.setRole("assistant");
-                            msg.setContent(content);
-                            msg.setCreatedAt(java.time.LocalDateTime.now());
-                            messageMapper.insert(msg);
+                    // 异步持久化助手消息，避免阻塞完成事件
+                    final String toPersist = content;
+                    persistExecutor.execute(() -> {
+                        try {
+                            if (toPersist != null && !toPersist.isEmpty()) {
+                                InterviewMessage msg = new InterviewMessage();
+                                msg.setSessionId(session.getId());
+                                msg.setRole("assistant");
+                                msg.setContent(toPersist);
+                                msg.setCreatedAt(java.time.LocalDateTime.now());
+                                messageMapper.insert(msg);
+                            }
+                        } catch (Exception e) {
+                            log.warn("Persist assistant message failed", e);
                         }
-                    } catch (Exception e) {
-                        log.warn("Persist assistant message failed", e);
-                    } finally {
+                    });
+                    try {
                         synchronized (buf) { buf.setLength(0); }
-                    }
+                    } catch (Exception ignore) {}
                     if (onAnswerComplete != null) onAnswerComplete.run();
                 },
                 ex -> {
