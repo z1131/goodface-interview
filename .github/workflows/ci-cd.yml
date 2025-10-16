@@ -73,6 +73,8 @@ jobs:
           key: ${{ secrets.ECS_SSH_KEY }}
           source: "deploy/docker-compose.yml"
           target: "/opt/goodface-interview/"
+          strip_components: 1
+          overwrite: true
 
       - name: Deploy on ECS
         uses: appleboy/ssh-action@v0.1.7
