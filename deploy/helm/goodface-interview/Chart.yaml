@@ -1,0 +1,6 @@
+apiVersion: v2
+name: goodface-interview
+description: Spring Boot 服务的 Helm Chart，用于在 K8s/ACK 部署
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

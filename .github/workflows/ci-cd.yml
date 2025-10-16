@@ -1,0 +1,89 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  ci:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+          cache: 'maven'
+
+      - name: Maven Package (skip tests)
+        run: mvn -B -ntp -DskipTests package
+
+  docker:
+    name: Build & Push Image to ACR
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Aliyun ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and Push
+        run: |
+          set -e
+          IMAGE="${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/goodface-interview:${{ github.sha }}"
+          docker build -f interview-app/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+
+  deploy-ecs:
+    name: Deploy to ECS via SSH
+    needs: docker
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Copy docker-compose to ECS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          port: ${{ secrets.ECS_PORT }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          source: "deploy/docker-compose.yml"
+          target: "/opt/goodface-interview/"
+
+      - name: Deploy on ECS
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          port: ${{ secrets.ECS_PORT }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/goodface-interview
+            docker login ${{ secrets.ACR_REGISTRY }} -u '${{ secrets.ACR_USERNAME }}' -p '${{ secrets.ACR_PASSWORD }}'
+            export ACR_REGISTRY='${{ secrets.ACR_REGISTRY }}'
+            export ACR_NAMESPACE='${{ secrets.ACR_NAMESPACE }}'
+            export IMAGE_TAG='${{ github.sha }}'
+            # 使用 .env 管理运行时配置（数据库、Redis、Nacos、DashScope），避免从 GitHub Secrets 注入
+            if [ ! -f .env ]; then
+              echo "缺少 .env 文件，请在 /opt/goodface-interview/.env 填写运行配置"; exit 1;
+            fi
+            docker compose --env-file .env pull
+            docker compose --env-file .env up -d --remove-orphans

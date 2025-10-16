@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  goodface-interview:
+    image: ${ACR_REGISTRY}/${ACR_NAMESPACE}/goodface-interview:${IMAGE_TAG}
+    container_name: goodface-interview
+    restart: always
+    ports:
+      - "8003:8003"
+      - "20882:20882"
+      - "22222:22222"
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      SPRING_REDIS_HOST: ${SPRING_REDIS_HOST}
+      SPRING_REDIS_PORT: ${SPRING_REDIS_PORT}
+      DUBBO_REGISTRY_ADDRESS: ${DUBBO_REGISTRY_ADDRESS}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+    # 按需挂载日志或配置
+    volumes:
+      - ./logs:/app/logs

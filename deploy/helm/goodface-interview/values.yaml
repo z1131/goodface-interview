@@ -1,0 +1,28 @@
+image:
+  repository: "<your-acr-registry>/<your-namespace>/goodface-interview"
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 8003
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+env:
+  SPRING_PROFILES_ACTIVE: "prod"
+  SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/goodface?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
+  SPRING_DATASOURCE_USERNAME: "root"
+  SPRING_DATASOURCE_PASSWORD: "password"
+  SPRING_REDIS_HOST: "redis"
+  SPRING_REDIS_PORT: "6379"
+  DUBBO_REGISTRY_ADDRESS: "nacos://nacos:8848"
+  DASHSCOPE_API_KEY: "replace-me"
