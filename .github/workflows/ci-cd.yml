@@ -83,7 +83,10 @@ jobs:
           key: ${{ secrets.ECS_SSH_KEY }}
           script: |
             set -e
+            # 确保部署目录存在
+            mkdir -p /opt/goodface-interview
             cd /opt/goodface-interview
+            
             docker login ${{ secrets.ACR_REGISTRY }} -u '${{ secrets.ACR_USERNAME }}' -p '${{ secrets.ACR_PASSWORD }}'
             export ACR_REGISTRY='${{ secrets.ACR_REGISTRY }}'
             export ACR_NAMESPACE='${{ secrets.ACR_NAMESPACE }}'
@@ -92,5 +95,25 @@ jobs:
             if [ ! -f .env ]; then
               echo "缺少 .env 文件，请在 /opt/goodface-interview/.env 填写运行配置"; exit 1;
             fi
-            docker compose --env-file .env pull
-            docker compose --env-file .env up -d --remove-orphans
+            
+            # 检测 Docker Compose v2 是否安装
+            if ! docker compose version >/dev/null 2>&1; then
+              echo "Docker Compose v2 未安装或不可用，请安装 docker compose 插件"; exit 1;
+            fi
+            
+            # 确认 Compose 文件存在
+            if [ ! -f docker-compose.yml ] && [ ! -f docker-compose.yaml ] && [ ! -f compose.yml ] && [ ! -f compose.yaml ]; then
+              echo "未找到 Compose 文件，请确保已上传 docker-compose.yml 到 /opt/goodface-interview";
+              ls -la;
+              exit 1;
+            fi
+            
+            # 优先使用 docker-compose.yml
+            COMPOSE_FILE=""
+            for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+              if [ -f "$f" ]; then COMPOSE_FILE="$f"; break; fi
+            done
+            echo "使用 Compose 文件: $COMPOSE_FILE"
+            
+            docker compose -f "$COMPOSE_FILE" --env-file .env pull
+            docker compose -f "$COMPOSE_FILE" --env-file .env up -d --remove-orphans
