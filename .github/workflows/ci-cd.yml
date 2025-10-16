@@ -57,6 +57,13 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify compose file exists
+        run: |
+          test -f deploy/docker-compose.yml && echo "compose file found" || (echo "compose file missing" && exit 1)
+
       - name: Copy docker-compose to ECS
         uses: appleboy/scp-action@v0.1.7
         with:
