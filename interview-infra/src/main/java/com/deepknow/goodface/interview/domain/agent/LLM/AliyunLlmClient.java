@@ -76,7 +76,7 @@ public class AliyunLlmClient implements LlmClient {
         try {
             log.info("LLM generateAnswer start: qLen={} ctxLen={}",
                     question == null ? 0 : question.length(), context == null ? 0 : context.length());
-            String system = "你是面试候选人助手，基于提供的背景与岗位需求，生成简洁、具体、专业的中文回答，避免虚构事实。你只需回答当前的问题，上下文当作参考，因为当前的问题可能是上下文的延伸";
+            String system = "你是面试候选人助手，基于提供的背景与岗位需求，生成简洁、专业的中文回答，避免虚构事实。你只需回答当前的问题，上下文当作参考，因为当前的问题可能是上下文的延伸";
             String prompt = "问题：" + safe(question) + "\n上下文：" + safe(context) + "\n请直接给出答案：";
             JsonNode resp = call(model, system, prompt);
             String result = pickText(resp);
