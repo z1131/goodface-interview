@@ -75,6 +75,7 @@ jobs:
           target: "/opt/goodface-interview/"
           strip_components: 1
           overwrite: true
+          debug: true
 
       - name: Deploy on ECS
         uses: appleboy/ssh-action@v0.1.7
