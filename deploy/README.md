@@ -56,9 +56,9 @@ sudo mkdir -p /opt/goodface-interview && cd /opt/goodface-interview
 - `docker compose pull && docker compose up -d --remove-orphans`
 
 成功后，服务将以容器运行：
-- HTTP：`8003`
-- Dubbo：`20882`
-- QOS：`22222`
+- HTTP：`8003`（对外暴露）
+- Dubbo：`20882`（仅容器内部网络可访问，不映射到宿主机）
+- QOS：`22222`（仅容器内部网络可访问，不映射到宿主机）
 
 ## 使用 .env 管理运行时配置（不经 GitHub Secrets）
 如果你不想在 GitHub 配置数据库、Redis、Nacos、DashScope 等运行参数，可在 ECS 上用 `.env` 文件集中管理：
@@ -116,7 +116,7 @@ docker compose --env-file .env up -d --remove-orphans
 ## 常见问题
 - Maven 构建卡顿：工作流已开启依赖缓存与 `dependency:go-offline`，如首次较慢属正常。
 - 镜像拉取失败：检查 `ACR_*` Secrets 是否正确，以及 ECS 能访问 ACR 注册域名。
-- 端口冲突：确认 ECS 上没有其他进程占用 `8003/20882/22222`。
+- 端口冲突：确认 ECS 上没有其他进程占用 `8003`。Dubbo/QoS 端口为容器内部端口，无需在宿主机开放。
 - DashScope 报错：确保未使用仓库中的默认 API Key，使用 Secrets 注入的真实 Key。
 
 ## 后续计划（可选）
