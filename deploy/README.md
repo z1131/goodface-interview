@@ -60,10 +60,10 @@ sudo mkdir -p /opt/goodface-interview && cd /opt/goodface-interview
 - Dubbo：`20882`（仅容器内部网络可访问，不映射到宿主机）
 - QOS：`22222`（仅容器内部网络可访问，不映射到宿主机）
 
-## 使用 .env 管理运行时配置（不经 GitHub Secrets）
-如果你不想在 GitHub 配置数据库、Redis、Nacos、DashScope 等运行参数，可在 ECS 上用 `.env` 文件集中管理：
+## 运行时配置：由 Secrets 自动生成 .env（可手工覆盖）
+工作流会基于 GitHub Secrets 自动生成 `/opt/goodface-interview/.env`；如不使用 Secrets 或需临时调整，可在 ECS 上手工编辑该文件：
 
-1) 在 `/opt/goodface-interview` 目录创建 `.env` 文件（Compose 会自动识别）：
+1) `.env` 示例（Compose 会自动识别）：
 
 ```
 # 镜像信息（由工作流导出或手动指定）
@@ -82,14 +82,14 @@ DUBBO_REGISTRY_ADDRESS=nacos://nacos.internal:8848
 DASHSCOPE_API_KEY=sk-xxxx
 ```
 
-2) 工作流的部署步骤已改为：
+2) 工作流以 `--env-file .env` 启动 Compose：
 
 ```
 docker compose --env-file .env pull
 docker compose --env-file .env up -d --remove-orphans
 ```
 
-3) 注意变量优先级：Shell 导出的环境变量会覆盖 `.env`。当前我们不再从工作流导出运行时配置，确保 `.env` 生效。
+3) 注意：工作流会写入 `.env` 并以 `--env-file .env` 启动，`.env` 的值优先生效；如需覆盖，请先编辑该文件再执行部署。
 
 ## 触发与回滚
 - 推送到 `main` 分支会触发 CI/CD，镜像 tag 使用 `github.sha`。

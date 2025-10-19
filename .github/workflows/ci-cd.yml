@@ -94,10 +94,34 @@ jobs:
             export ACR_REGISTRY='${{ secrets.ACR_REGISTRY }}'
             export ACR_NAMESPACE='${{ secrets.ACR_NAMESPACE }}'
             export IMAGE_TAG='${{ github.sha }}'
-            # 使用 .env 管理运行时配置（数据库、Redis、Nacos、DashScope），避免从 GitHub Secrets 注入
-            if [ ! -f .env ]; then
-              echo "缺少 .env 文件，请在 /opt/goodface-interview/.env 填写运行配置"; exit 1;
-            fi
+            # 由 GitHub Secrets 生成 .env（支持 INTERVIEW_* 前缀优先生效，缺失时回退到通用键）
+            echo "ACR_REGISTRY=${{ secrets.ACR_REGISTRY }}" > .env
+            echo "ACR_NAMESPACE=${{ secrets.ACR_NAMESPACE }}" >> .env
+            echo "IMAGE_TAG=${{ github.sha }}" >> .env
+            echo "SPRING_PROFILES_ACTIVE=prod" >> .env
+
+            SPRING_DATASOURCE_URL_VAL='${{ secrets.INTERVIEW_SPRING_DATASOURCE_URL }}'
+            [ -z "$SPRING_DATASOURCE_URL_VAL" ] && SPRING_DATASOURCE_URL_VAL='${{ secrets.SPRING_DATASOURCE_URL }}'
+            SPRING_DATASOURCE_USERNAME_VAL='${{ secrets.INTERVIEW_SPRING_DATASOURCE_USERNAME }}'
+            [ -z "$SPRING_DATASOURCE_USERNAME_VAL" ] && SPRING_DATASOURCE_USERNAME_VAL='${{ secrets.SPRING_DATASOURCE_USERNAME }}'
+            SPRING_DATASOURCE_PASSWORD_VAL='${{ secrets.INTERVIEW_SPRING_DATASOURCE_PASSWORD }}'
+            [ -z "$SPRING_DATASOURCE_PASSWORD_VAL" ] && SPRING_DATASOURCE_PASSWORD_VAL='${{ secrets.SPRING_DATASOURCE_PASSWORD }}'
+            SPRING_REDIS_HOST_VAL='${{ secrets.INTERVIEW_SPRING_REDIS_HOST }}'
+            [ -z "$SPRING_REDIS_HOST_VAL" ] && SPRING_REDIS_HOST_VAL='${{ secrets.SPRING_REDIS_HOST }}'
+            SPRING_REDIS_PORT_VAL='${{ secrets.INTERVIEW_SPRING_REDIS_PORT }}'
+            [ -z "$SPRING_REDIS_PORT_VAL" ] && SPRING_REDIS_PORT_VAL='${{ secrets.SPRING_REDIS_PORT }}'
+            DUBBO_REGISTRY_ADDRESS_VAL='${{ secrets.INTERVIEW_DUBBO_REGISTRY_ADDRESS }}'
+            [ -z "$DUBBO_REGISTRY_ADDRESS_VAL" ] && DUBBO_REGISTRY_ADDRESS_VAL='${{ secrets.DUBBO_REGISTRY_ADDRESS }}'
+            DASHSCOPE_API_KEY_VAL='${{ secrets.INTERVIEW_DASHSCOPE_API_KEY }}'
+            [ -z "$DASHSCOPE_API_KEY_VAL" ] && DASHSCOPE_API_KEY_VAL='${{ secrets.DASHSCOPE_API_KEY }}'
+
+            echo "SPRING_DATASOURCE_URL=$SPRING_DATASOURCE_URL_VAL" >> .env
+            echo "SPRING_DATASOURCE_USERNAME=$SPRING_DATASOURCE_USERNAME_VAL" >> .env
+            echo "SPRING_DATASOURCE_PASSWORD=$SPRING_DATASOURCE_PASSWORD_VAL" >> .env
+            echo "SPRING_REDIS_HOST=$SPRING_REDIS_HOST_VAL" >> .env
+            echo "SPRING_REDIS_PORT=$SPRING_REDIS_PORT_VAL" >> .env
+            echo "DUBBO_REGISTRY_ADDRESS=$DUBBO_REGISTRY_ADDRESS_VAL" >> .env
+            echo "DASHSCOPE_API_KEY=$DASHSCOPE_API_KEY_VAL" >> .env
             
             # 检测 Docker Compose v2 是否安装
             if ! docker compose version >/dev/null 2>&1; then
@@ -120,3 +144,11 @@ jobs:
             
             docker compose -f "$COMPOSE_FILE" --env-file .env pull
             docker compose -f "$COMPOSE_FILE" --env-file .env up -d --remove-orphans
+
+            # Ensure unified network for name resolution across services (nacos/mysql/redis)
+            docker network create goodface-net || true
+            for svc in goodface-interview goodface-portal goodface-user mysql redis nacos; do
+              docker network connect goodface-net "$svc" 2>/dev/null || true
+            done
+            echo "Unified network members:"
+            docker network inspect goodface-net | sed -n '1,200p'
