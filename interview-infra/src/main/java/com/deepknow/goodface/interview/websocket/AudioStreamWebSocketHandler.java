@@ -74,6 +74,14 @@ public class AudioStreamWebSocketHandler {
         log.trace("Received audio chunk, bytes={}", message.remaining());
         byte[] bytes = new byte[message.remaining()];
         message.get(bytes);
+        if (audioStreamService == null) {
+            log.warn("AudioStreamService not injected; drop audio chunk for ws {}", session != null ? session.getId() : "null");
+            return;
+        }
+        if (session == null) {
+            log.warn("Session is null in onBinaryMessage; drop audio chunk");
+            return;
+        }
         audioStreamService.onAudio(session.getId(), bytes);
     }
 
@@ -86,15 +94,34 @@ public class AudioStreamWebSocketHandler {
 
     @OnClose
     public void onClose(Session session, CloseReason reason) {
-        log.info("WS closed: {} status={}", session.getId(), reason);
-        audioStreamService.flush(session.getId());
-        audioStreamService.close(session.getId());
+        String wsId = session != null ? session.getId() : null;
+        log.info("WS closed: {} status={}", wsId, reason);
+        if (audioStreamService == null) {
+            log.warn("AudioStreamService not injected; skip flush/close for ws {}", wsId);
+            return;
+        }
+        if (wsId == null) {
+            log.warn("Session is null in onClose; skip flush/close");
+            return;
+        }
+        audioStreamService.flush(wsId);
+        audioStreamService.close(wsId);
     }
 
     @OnError
     public void onError(Session session, Throwable throwable) {
-        log.warn("WS error: {}", throwable.getMessage(), throwable);
-        audioStreamService.close(session.getId());
+        String msg = throwable != null ? throwable.getMessage() : "unknown";
+        log.warn("WS error: {}", msg, throwable);
+        String wsId = session != null ? session.getId() : null;
+        if (audioStreamService == null) {
+            log.warn("AudioStreamService not injected; skip close for ws {}", wsId);
+            return;
+        }
+        if (wsId == null) {
+            log.warn("Session is null in onError; skip close");
+            return;
+        }
+        audioStreamService.close(wsId);
     }
 
     private String parseQueryParam(Session session, String key) {
