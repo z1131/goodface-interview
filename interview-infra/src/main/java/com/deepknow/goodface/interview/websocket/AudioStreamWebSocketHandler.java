@@ -20,12 +20,28 @@ public class AudioStreamWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(AudioStreamWebSocketHandler.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
     
-    @Autowired
-    private AudioStreamService audioStreamService;
+    // 替换原来的 @Autowired 字段为静态字段，配合 Injector 进行注入
+    private static AudioStreamService audioStreamService;
+    public static void setAudioStreamService(AudioStreamService service) { audioStreamService = service; }
+    private static AudioStreamService ensureService() {
+        if (audioStreamService == null) {
+            try { audioStreamService = SpringContextHolder.getBean(AudioStreamService.class); }
+            catch (Exception ignored) {}
+        }
+        return audioStreamService;
+    }
 
     @OnOpen
     public void onOpen(Session session) {
-        log.info("WS connected: {}", session.getId());
+        log.info("WS connected: {}", session != null ? session.getId() : null);
+        if (ensureService() == null) {
+            String wsId = session != null ? session.getId() : null;
+            log.warn("AudioStreamService not injected; refuse open for ws {}", wsId);
+            try {
+                if (session != null) session.close(new CloseReason(CloseReason.CloseCodes.UNEXPECTED_CONDITION, "SERVICE_NOT_READY"));
+            } catch (Exception ignored) {}
+            return;
+        }
         String sessionId = parseQueryParam(session, "sessionId");
         audioStreamService.open(
                 session.getId(),
@@ -74,7 +90,7 @@ public class AudioStreamWebSocketHandler {
         log.trace("Received audio chunk, bytes={}", message.remaining());
         byte[] bytes = new byte[message.remaining()];
         message.get(bytes);
-        if (audioStreamService == null) {
+        if (ensureService() == null) {
             log.warn("AudioStreamService not injected; drop audio chunk for ws {}", session != null ? session.getId() : "null");
             return;
         }
@@ -96,7 +112,7 @@ public class AudioStreamWebSocketHandler {
     public void onClose(Session session, CloseReason reason) {
         String wsId = session != null ? session.getId() : null;
         log.info("WS closed: {} status={}", wsId, reason);
-        if (audioStreamService == null) {
+        if (ensureService() == null) {
             log.warn("AudioStreamService not injected; skip flush/close for ws {}", wsId);
             return;
         }
@@ -113,7 +129,7 @@ public class AudioStreamWebSocketHandler {
         String msg = throwable != null ? throwable.getMessage() : "unknown";
         log.warn("WS error: {}", msg, throwable);
         String wsId = session != null ? session.getId() : null;
-        if (audioStreamService == null) {
+        if (ensureService() == null) {
             log.warn("AudioStreamService not injected; skip close for ws {}", wsId);
             return;
         }
