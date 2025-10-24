@@ -1,24 +1,34 @@
 package com.deepknow.goodface.interview.domain.agent;
 
+import com.deepknow.goodface.interview.domain.session.model.SessionContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayDeque;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+
+import com.deepknow.goodface.interview.domain.agent.strategy.SttSegmentAssembler;
+import com.deepknow.goodface.interview.domain.session.util.ConversationContextBuilder;
 
 /**
  * 默认 Agent 实现：接收 STT 最终文本，触发 LLM 问题提取与答案生成（支持流式）。
  */
 public class DefaultInterviewAgent implements InterviewAgent {
     private static final Logger log = LoggerFactory.getLogger(DefaultInterviewAgent.class);
-    private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    private static final java.util.concurrent.ScheduledExecutorService scheduler = com.deepknow.goodface.interview.domain.agent.AgentSchedulers.get();
 
     private final AgentFactory factory;
     private SttClient sttClient;
     private LlmClient llmClient;
+    private SttSegmentAssembler segmentAssembler;
+    private ConversationContextBuilder ctxBuilder;
+    private String sessionId;
     private boolean llmStreamingEnabled = true;
+    private boolean llmSimilarityEnabled = true;
     private String lastQuestion;
     private java.util.ArrayDeque<String> recentQuestions;
     private int contextWindowSize = 3;
@@ -27,6 +37,8 @@ public class DefaultInterviewAgent implements InterviewAgent {
     private int maxUtterances = 5;
     private int debounceMillis = 1200;
     private double similarityThreshold = 0.85;
+    private int minCharsForDetection = 20;
+    private boolean adaptiveSuppression = true;
     private final StringBuilder pendingBuffer = new StringBuilder(512);
     private java.util.concurrent.ScheduledFuture<?> pendingTask;
     private boolean answerOnlyOnQuestion = true;
@@ -43,7 +55,8 @@ public class DefaultInterviewAgent implements InterviewAgent {
     }
 
     @Override
-    public void start(com.deepknow.goodface.interview.domain.session.model.SessionContext ctx,
+    @Deprecated
+    public void start(SessionContext ctx,
                       Consumer<String> onSttPartial,
                       Consumer<String> onSttFinal,
                       Consumer<String> onQuestion,
@@ -51,78 +64,87 @@ public class DefaultInterviewAgent implements InterviewAgent {
                       Runnable onAnswerComplete,
                       Consumer<Throwable> onError,
                       Runnable onSttReady) {
-        // 读取 LLM/STT 配置并初始化
-        sttClient = factory.createStt();
-        java.util.Map<String, Object> cfg = ctx.getConfig();
-        String apiKeyEnv = getString(cfg, "stt.apiKeyEnv", System.getProperty("stt.apiKeyEnv", "DASHSCOPE_API_KEY"));
-        String apiKeyProp = getString(cfg, "stt.apiKey", System.getProperty("stt.apiKey"));
-        String apiKey = (apiKeyProp != null && !apiKeyProp.isEmpty()) ? apiKeyProp : System.getenv(apiKeyEnv);
-        String model = getString(cfg, "stt.model", System.getProperty("stt.model", "gummy-realtime-v1"));
-        int sampleRate = getInt(cfg, "stt.sampleRate", Integer.parseInt(System.getProperty("stt.sampleRate", "16000")));
-        String language = getString(cfg, "stt.language", System.getProperty("stt.language", "zh-CN"));
-        sttClient.init(apiKey, model, sampleRate, language);
+        AgentConfig config = AgentConfig.from(ctx);
+        AgentCallbacks callbacks = AgentCallbacks.of(
+                onSttPartial,
+                onSttFinal,
+                onQuestion,
+                onAnswerDelta,
+                onAnswerComplete,
+                onError,
+                onSttReady
+        );
+        start(ctx, config, callbacks);
+    }
 
-        llmClient = factory.createLlm();
-        String llmApiKeyEnv = getString(cfg, "llm.apiKeyEnv", System.getProperty("llm.apiKeyEnv", "DASHSCOPE_API_KEY"));
-        String llmApiKeyProp = getString(cfg, "llm.apiKey", System.getProperty("llm.apiKey"));
-        String llmApiKey = (llmApiKeyProp != null && !llmApiKeyProp.isEmpty()) ? llmApiKeyProp : System.getenv(llmApiKeyEnv);
-        String llmModel = getString(cfg, "llm.model", System.getProperty("llm.model", "qwen-turbo"));
-        double llmTemperature = getDouble(cfg, "llm.temperature", Double.parseDouble(System.getProperty("llm.temperature", "0.5")));
-        double llmTopP = getDouble(cfg, "llm.topP", Double.parseDouble(System.getProperty("llm.topP", "0.9")));
-        int llmMaxTokens = getInt(cfg, "llm.maxTokens", Integer.parseInt(System.getProperty("llm.maxTokens", "512")));
-        boolean llmStreaming = getBoolean(cfg, "llm.streaming", Boolean.parseBoolean(System.getProperty("llm.streaming", "true")));
-        llmClient.init(llmApiKey, llmModel, llmTemperature, llmTopP, llmMaxTokens, llmStreaming);
-        this.llmStreamingEnabled = llmStreaming;
+    @Override
+    public void start(SessionContext ctx,
+                      AgentConfig config,
+                      AgentCallbacks callbacks) {
+        // 初始化 STT
+        this.sessionId = ctx.getSessionId();
+        sttClient = factory.createStt(config);
+        sttClient.init(config.getSttApiKey(), config.getSttModel(), config.getSttSampleRate(), config.getSttLanguage());
 
-        // 初始化上下文窗口（最近几轮问题）
-        this.contextWindowSize = getInt(cfg, "context.windowSize", 3);
-        if (this.contextWindowSize < 1) this.contextWindowSize = 1;
-        this.recentQuestions = new java.util.ArrayDeque<>(this.contextWindowSize);
-        // 读取用户填写的提示词（来自 Portal 创建会话时的配置）
-        this.userPrompt = getString(cfg, "prompt", "");
-        // 初始化最近陈述与聚合配置
-        this.maxUtterances = getInt(cfg, "context.maxUtterances", 5);
-        if (this.maxUtterances < 1) this.maxUtterances = 1;
-        this.recentUtterances = new java.util.ArrayDeque<>(this.maxUtterances);
-        this.debounceMillis = getInt(cfg, "context.debounceMillis", 1200);
+        // 初始化 LLM
+        llmClient = factory.createLlm(config);
+        llmClient.setSessionId(this.sessionId);
+        llmClient.init(config.getLlmApiKey(), config.getLlmModel(), config.getLlmTemperature(),
+                config.getLlmTopP(), config.getLlmMaxTokens(), config.isLlmStreaming());
+        this.llmStreamingEnabled = config.isLlmStreaming();
+        this.llmSimilarityEnabled = config.isLlmSimilarityEnabled();
+        log.info("InterviewAgent starting. sessionId={}", this.sessionId);
+
+        // 上下文构建器
+        int ctxWin = config.getContextWindowSize();
+        if (ctxWin < 1) ctxWin = 1;
+        int maxUtter = config.getMaxUtterances();
+        if (maxUtter < 1) maxUtter = 1;
+        this.ctxBuilder = new ConversationContextBuilder(config.getUserPrompt(), ctxWin, maxUtter);
+
+        // 策略参数
+        this.debounceMillis = config.getDebounceMillis();
         if (this.debounceMillis < 0) this.debounceMillis = 0;
-        this.similarityThreshold = getDouble(cfg, "context.similarityThreshold", 0.85);
-        this.answerOnlyOnQuestion = getBoolean(cfg, "context.answerOnlyOnQuestion", true);
-        // 读取软端点与早提交配置
-        this.softEndpointMillis = getInt(cfg, "stt.softEndpointMillis", 1500);
-        if (this.softEndpointMillis < 300) this.softEndpointMillis = 300;
-        this.maxSegmentChars = getInt(cfg, "stt.maxSegmentChars", 240);
-        if (this.maxSegmentChars < 50) this.maxSegmentChars = 50;
-        this.earlyCommitPunctuation = getBoolean(cfg, "stt.earlyCommitPunctuation", true);
+        this.similarityThreshold = config.getSimilarityThreshold();
+        this.answerOnlyOnQuestion = config.isAnswerOnlyOnQuestion();
+        int softMs = config.getSoftEndpointMillis();
+        if (softMs < 300) softMs = 300;
+        int maxSeg = config.getMaxSegmentChars();
+        if (maxSeg < 50) maxSeg = 50;
+        boolean earlyPunc = config.isEarlyCommitPunctuation();
+        int minChars = config.getMinCharsForDetection();
+        if (minChars < 1) minChars = 1;
+        this.minCharsForDetection = minChars;
+        this.adaptiveSuppression = config.isAdaptiveSuppression();
+
+        // STT 片段组装器
+        this.segmentAssembler = new SttSegmentAssembler(
+                scheduler,
+                softMs,
+                maxSeg,
+                earlyPunc,
+                segment -> { processSegment(segment,
+                        callbacks.getOnQuestion(),
+                        callbacks.getOnAnswerDelta(),
+                        callbacks.getOnAnswerComplete(),
+                        callbacks.getOnError());
+                    log.debug("Segment metrics snapshot: {} sessionId={}", segmentAssembler.getMetricsSnapshot(), sessionId);
+                },
+                e -> log.warn("Soft endpoint process failed. sessionId=" + sessionId, e)
+        );
 
         final boolean[] sttFailed = { false };
         sttClient.startSession(ctx.getSessionId(),
                 partial -> {
-                    // 透传到上层（实时字幕等）
-                    if (onSttPartial != null) onSttPartial.accept(partial);
-                    // 累积 partial 文本
-                    appendPartial(partial);
-                    // 标点早提交或最大段长限制
-                    if (shouldEarlyCommit(partialBuffer)) {
-                        String segment = drainPartialBuffer();
-                        if (!segment.isEmpty()) {
-                            // 取消软端点任务，避免重复
-                            cancelSoftEndpoint();
-                            scheduler.execute(() -> processSegment(segment, onQuestion, onAnswerDelta, onAnswerComplete, onError));
-                        }
-                    } else {
-                        // 重置软端点定时任务
-                        rescheduleSoftEndpoint(onQuestion, onAnswerDelta, onError, onAnswerComplete);
-                    }
+                    if (callbacks.getOnSttPartial() != null) callbacks.getOnSttPartial().accept(partial);
+                    segmentAssembler.onPartial(partial);
                 },
                 fin -> {
-                    if (onSttFinal != null) onSttFinal.accept(fin);
-                    // 句末事件到达：取消软端点并清空 partial 缓冲，避免重复
-                    cancelSoftEndpoint();
-                    clearPartialBuffer();
-                    // 记录最近陈述（原文）
+                    if (callbacks.getOnSttFinal() != null) callbacks.getOnSttFinal().accept(fin);
+                    segmentAssembler.cancel();
+                    segmentAssembler.clear();
+                    log.debug("STT assembler metrics snapshot: {} sessionId={}", segmentAssembler.getMetricsSnapshot(), sessionId);
                     addRecentUtterance(fin);
-                    // 聚合：重置去抖定时器，将片段加入待处理缓冲
                     synchronized (pendingBuffer) {
                         if (pendingTask != null) {
                             try { pendingTask.cancel(false); } catch (Exception ignore) {}
@@ -131,19 +153,21 @@ public class DefaultInterviewAgent implements InterviewAgent {
                         if (pendingBuffer.length() > 0) pendingBuffer.append(' ');
                         pendingBuffer.append(fin);
                         pendingTask = scheduler.schedule(() -> {
-                            processPending(onQuestion, onAnswerDelta, onAnswerComplete, onError);
+                            processPending(
+                                    callbacks.getOnQuestion(),
+                                    callbacks.getOnAnswerDelta(),
+                                    callbacks.getOnAnswerComplete(),
+                                    callbacks.getOnError());
                         }, debounceMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
                     }
                 },
                 err -> {
                     sttFailed[0] = true;
-                    if (onError != null) onError.accept(err);
+                    if (callbacks.getOnError() != null) callbacks.getOnError().accept(err);
                 },
-                () -> { if (onSttReady != null) onSttReady.run(); }
+                () -> { if (callbacks.getOnSttReady() != null) callbacks.getOnSttReady().run(); }
         );
-
-        // 去除简单延时方案，改由 STT 客户端在连接建立后触发 onReady
-    }
+}
 
     @Override
     public void sendAudio(byte[] pcmChunk) {
@@ -152,16 +176,13 @@ public class DefaultInterviewAgent implements InterviewAgent {
 
     @Override
     public void flush() {
-        try { if (sttClient != null) sttClient.flush(); }
-        catch (Exception e) { log.warn("Agent flush error", e); }
+        runSafe(() -> { if (sttClient != null) sttClient.flush(); }, "Agent flush error");
     }
 
     @Override
     public void close() {
-        try { if (sttClient != null) sttClient.close(); }
-        catch (Exception e) { log.warn("Agent STT close error", e); }
-        try { if (llmClient != null) llmClient.close(); }
-        catch (Exception e) { log.warn("Agent LLM close error", e); }
+        runSafe(() -> { if (sttClient != null) sttClient.close(); }, "Agent STT close error");
+        runSafe(() -> { if (llmClient != null) llmClient.close(); }, "Agent LLM close error");
     }
 
     private String getString(java.util.Map<String, Object> cfg, String key, String def) {
@@ -178,39 +199,14 @@ public class DefaultInterviewAgent implements InterviewAgent {
     }
 
     private void addRecentQuestion(String q) {
-        if (q == null || q.isEmpty()) return;
-        // 避免重复相邻问题
-        String last = recentQuestions.peekLast();
-        if (last != null && last.equals(q)) return;
-        if (recentQuestions.size() >= contextWindowSize) {
-            recentQuestions.pollFirst();
-        }
-        recentQuestions.offerLast(q);
+        // 委托给上下文构建器
+        if (ctxBuilder != null) ctxBuilder.addRecentQuestion(q);
     }
 
     private String buildContextString() {
-        if (recentQuestions == null || recentQuestions.isEmpty()) return "";
-        StringBuilder sb = new StringBuilder(256);
-        if (userPrompt != null && !userPrompt.isEmpty()) {
-            sb.append("用户提示词：").append(userPrompt).append("\n");
-        }
-        sb.append("最近问题：");
-        boolean first = true;
-        for (String q : recentQuestions) {
-            if (!first) sb.append(" | ");
-            sb.append(q);
-            first = false;
-        }
-        if (recentUtterances != null && !recentUtterances.isEmpty()) {
-            sb.append("\n最近陈述：");
-            first = true;
-            for (String u : recentUtterances) {
-                if (!first) sb.append(" | ");
-                sb.append(u);
-                first = false;
-            }
-        }
-        return sb.toString();
+        // 委托给上下文构建器
+        if (ctxBuilder == null) return "";
+        return ctxBuilder.buildContextString();
     }
 
     private double getDouble(java.util.Map<String, Object> cfg, String key, double def) {
@@ -238,11 +234,8 @@ public class DefaultInterviewAgent implements InterviewAgent {
     }
 
     private void addRecentUtterance(String u) {
-        if (u == null || u.isEmpty()) return;
-        if (recentUtterances.size() >= maxUtterances) {
-            recentUtterances.pollFirst();
-        }
-        recentUtterances.offerLast(u);
+        // 委托给上下文构建器
+        if (ctxBuilder != null) ctxBuilder.addRecentUtterance(u);
     }
 
     private double jaccardSimilarity(String a, String b) {
@@ -277,12 +270,64 @@ public class DefaultInterviewAgent implements InterviewAgent {
             return;
         }
         try {
+            if (normCombined.length() < minCharsForDetection) { return; }
             String ctxStr = buildContextString();
             String question = llmClient.extractQuestion(combined, ctxStr);
             String normQ = normalize(question);
             String normLast = normalize(lastQuestion);
             boolean isNoQuestion = question != null && "无问题".equals(question.trim());
-            boolean isNewEnough = normQ != null && !normQ.isEmpty() && !normQ.equals(normLast) && jaccardSimilarity(question, lastQuestion) < similarityThreshold;
+            boolean isNewEnough;
+            if (llmSimilarityEnabled && !isNoQuestion && normQ != null && !normQ.isEmpty()) {
+                com.deepknow.goodface.interview.domain.agent.EquivalenceResult eq = llmClient.judgeQuestionEquivalence(lastQuestion, question, ctxStr);
+                String clazz = (eq == null || eq.getClazz() == null) ? "SAME" : eq.getClazz().trim().toUpperCase();
+                if ("NONE".equals(clazz)) {
+                    isNoQuestion = true;
+                    isNewEnough = false;
+                } else if ("NEW".equals(clazz)) {
+                    isNewEnough = true;
+                    String canonical = (eq.getCanonical() == null || eq.getCanonical().isEmpty()) ? question : eq.getCanonical();
+                    normQ = normalize(canonical);
+                    question = canonical;
+                } else {
+                    isNewEnough = false;
+                    if ("ELABORATION".equals(clazz)) {
+                        // 累积补充并更新记忆
+                        ctxBuilder.addElaborationText(combined);
+                        try {
+                            com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult mem = llmClient.updateContextMemory(lastQuestion, ctxBuilder.getRollingSummary(), ctxStr);
+                            if (mem != null) {
+                                String summary = mem.getSummary();
+                                if (summary != null && !summary.isEmpty()) ctxBuilder.addElaborationText(summary);
+                                java.util.Map<String, String> facts = mem.getFacts();
+                                if (facts != null && !facts.isEmpty()) ctxBuilder.mergeFacts(facts);
+                            }
+                        } catch (Exception e) {
+                            log.debug("Memory update error ignored. sessionId={}", sessionId, e);
+                        }
+                    }
+                }
+            } else {
+                isNewEnough = normQ != null && !normQ.isEmpty() && !normQ.equals(normLast) && jaccardSimilarity(question, lastQuestion) < similarityThreshold;
+            }
+            // 当无明确问题时，尝试判定是否为对最近问题的补充
+            if (isNoQuestion && lastQuestion != null && !lastQuestion.isEmpty()) {
+                com.deepknow.goodface.interview.domain.agent.EquivalenceResult rel = llmClient.judgeSegmentRelation(lastQuestion, combined, ctxStr);
+                String rClazz = (rel == null || rel.getClazz() == null) ? "NONE" : rel.getClazz().trim().toUpperCase();
+                if ("ELABORATION".equals(rClazz)) {
+                    ctxBuilder.addElaborationText(combined);
+                    try {
+                        com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult mem = llmClient.updateContextMemory(lastQuestion, ctxBuilder.getRollingSummary(), ctxStr);
+                        if (mem != null) {
+                            String summary = mem.getSummary();
+                            if (summary != null && !summary.isEmpty()) ctxBuilder.addElaborationText(summary);
+                            java.util.Map<String, String> facts = mem.getFacts();
+                            if (facts != null && !facts.isEmpty()) ctxBuilder.mergeFacts(facts);
+                        }
+                    } catch (Exception e) {
+                        log.debug("Memory update error ignored. sessionId={}", sessionId, e);
+                    }
+                }
+            }
             if (!isNoQuestion && isNewEnough) {
                 lastQuestion = question;
                 addRecentQuestion(normQ);
@@ -299,7 +344,7 @@ public class DefaultInterviewAgent implements InterviewAgent {
                         inputForAnswer,
                         ctxStr,
                         delta -> { if (onAnswerDelta != null) onAnswerDelta.accept(delta); },
-                        () -> { if (onAnswerComplete != null) onAnswerComplete.run(); },
+                        () -> { if (onAnswerComplete != null) onAnswerComplete.run(); log.debug("Context metrics snapshot: {} sessionId={}", ctxBuilder.getMetricsSnapshot(), sessionId); },
                         ex -> { if (onError != null) onError.accept(ex); }
                 );
             } else {
@@ -309,7 +354,7 @@ public class DefaultInterviewAgent implements InterviewAgent {
             }
             rememberCommitted(normCombined);
         } catch (Exception ex) {
-            log.warn("LLM processing failed", ex);
+            log.warn("LLM processing failed. sessionId=" + sessionId, ex);
             if (onError != null) onError.accept(ex);
         }
     }
@@ -342,7 +387,7 @@ public class DefaultInterviewAgent implements InterviewAgent {
                     processSegment(segment, onQuestion, onAnswerDelta, onAnswerComplete, onError);
                 }
             } catch (Exception e) {
-                log.warn("Soft endpoint process failed", e);
+                log.warn("Soft endpoint process failed. sessionId=" + sessionId, e);
             }
         }, softEndpointMillis, TimeUnit.MILLISECONDS);
     }
@@ -377,12 +422,64 @@ public class DefaultInterviewAgent implements InterviewAgent {
             return;
         }
         try {
+            if (normSeg.length() < minCharsForDetection) { return; }
             String ctxStr = buildContextString();
             String question = llmClient.extractQuestion(segment, ctxStr);
             String normQ = normalize(question);
             String normLast = normalize(lastQuestion);
             boolean isNoQuestion = question != null && "无问题".equals(question.trim());
-            boolean isNewEnough = normQ != null && !normQ.isEmpty() && !normQ.equals(normLast) && jaccardSimilarity(question, lastQuestion) < similarityThreshold;
+            boolean isNewEnough;
+            if (llmSimilarityEnabled && !isNoQuestion && normQ != null && !normQ.isEmpty()) {
+                com.deepknow.goodface.interview.domain.agent.EquivalenceResult eq = llmClient.judgeQuestionEquivalence(lastQuestion, question, ctxStr);
+                String clazz = (eq == null || eq.getClazz() == null) ? "SAME" : eq.getClazz().trim().toUpperCase();
+                if ("NONE".equals(clazz)) {
+                    isNoQuestion = true;
+                    isNewEnough = false;
+                } else if ("NEW".equals(clazz)) {
+                    isNewEnough = true;
+                    String canonical = (eq.getCanonical() == null || eq.getCanonical().isEmpty()) ? question : eq.getCanonical();
+                    normQ = normalize(canonical);
+                    question = canonical;
+                } else {
+                    isNewEnough = false;
+                    if ("ELABORATION".equals(clazz)) {
+                        // 累积补充并更新记忆
+                        ctxBuilder.addElaborationText(segment);
+                        try {
+                            com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult mem = llmClient.updateContextMemory(lastQuestion, ctxBuilder.getRollingSummary(), ctxStr);
+                            if (mem != null) {
+                                String summary = mem.getSummary();
+                                if (summary != null && !summary.isEmpty()) ctxBuilder.addElaborationText(summary);
+                                java.util.Map<String, String> facts = mem.getFacts();
+                                if (facts != null && !facts.isEmpty()) ctxBuilder.mergeFacts(facts);
+                            }
+                        } catch (Exception e) {
+                            log.debug("Memory update error ignored. sessionId={}", sessionId, e);
+                        }
+                    }
+                }
+            } else {
+                isNewEnough = normQ != null && !normQ.isEmpty() && !normQ.equals(normLast) && jaccardSimilarity(question, lastQuestion) < similarityThreshold;
+            }
+            // 当无明确问题时，尝试判定是否为对最近问题的补充
+            if (isNoQuestion && lastQuestion != null && !lastQuestion.isEmpty()) {
+                com.deepknow.goodface.interview.domain.agent.EquivalenceResult rel = llmClient.judgeSegmentRelation(lastQuestion, segment, ctxStr);
+                String rClazz = (rel == null || rel.getClazz() == null) ? "NONE" : rel.getClazz().trim().toUpperCase();
+                if ("ELABORATION".equals(rClazz)) {
+                    ctxBuilder.addElaborationText(segment);
+                    try {
+                        com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult mem = llmClient.updateContextMemory(lastQuestion, ctxBuilder.getRollingSummary(), ctxStr);
+                        if (mem != null) {
+                            String summary = mem.getSummary();
+                            if (summary != null && !summary.isEmpty()) ctxBuilder.addElaborationText(summary);
+                            java.util.Map<String, String> facts = mem.getFacts();
+                            if (facts != null && !facts.isEmpty()) ctxBuilder.mergeFacts(facts);
+                        }
+                    } catch (Exception e) {
+                        log.debug("Memory update error ignored. sessionId={}", sessionId, e);
+                    }
+                }
+            }
             if (!isNoQuestion && isNewEnough) {
                 lastQuestion = question;
                 addRecentQuestion(normQ);
@@ -404,10 +501,11 @@ public class DefaultInterviewAgent implements InterviewAgent {
                 String answer = llmClient.generateAnswer(inputForAnswer, ctxStr);
                 if (onAnswerDelta != null && answer != null) onAnswerDelta.accept(answer);
                 if (onAnswerComplete != null) onAnswerComplete.run();
+                log.debug("Context metrics snapshot: {} sessionId={}", ctxBuilder.getMetricsSnapshot(), sessionId);
             }
             rememberCommitted(normSeg);
         } catch (Exception ex) {
-            log.warn("LLM processing failed", ex);
+            log.warn("LLM processing failed. sessionId=" + sessionId, ex);
             if (onError != null) onError.accept(ex);
         }
     }
@@ -420,10 +518,19 @@ public class DefaultInterviewAgent implements InterviewAgent {
 
     private boolean isSimilarToRecentCommitted(String normText) {
         if (normText == null || normText.isEmpty()) return false;
+        if (!adaptiveSuppression) return false;
         for (String s : recentCommittedNorm) {
             if (s.equals(normText)) return true;
             if (jaccardSimilarity(s, normText) >= 0.85) return true;
         }
         return false;
+    }
+
+    private void runSafe(Runnable action, String warnTag) {
+        try {
+            action.run();
+        } catch (Exception e) {
+            log.warn(warnTag + ". sessionId=" + sessionId, e);
+        }
     }
 }

@@ -4,7 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "llm")
 public class LlmConfigProperties {
-    private String provider = "aliyun"; // aliyun | mock
+    private String provider = "aliyun"; // aliyun
     private String apiKeyEnv = "DASHSCOPE_API_KEY";
     private String apiKey; // 直接配置的密钥（优先于 apiKeyEnv）
     private String model = "qwen-turbo";

@@ -12,4 +12,8 @@ public class CreateSessionRequest implements Serializable {
     private String sessionId;
     private String userId;
     private Map<String, Object> config;
+
+    public String getSessionId() { return sessionId; }
+    public String getUserId() { return userId; }
+    public Map<String, Object> getConfig() { return config; }
 }

@@ -12,20 +12,16 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.net.URI;
 import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Component
 @ServerEndpoint(value = "/audio/stream")
 public class AudioStreamWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(AudioStreamWebSocketHandler.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
-    private static AudioStreamService audioStreamService;
-
-    public static void setAudioStreamService(AudioStreamService service) {
-        audioStreamService = service;
-    }
+    
+    @Autowired
+    private AudioStreamService audioStreamService;
 
     @OnOpen
     public void onOpen(Session session) {
@@ -103,7 +99,7 @@ public class AudioStreamWebSocketHandler {
 
     private String parseQueryParam(Session session, String key) {
         try {
-            URI uri = session.getRequestURI();
+            java.net.URI uri = session.getRequestURI();
             String query = uri.getQuery();
             if (query == null || query.isEmpty()) return null;
             String[] pairs = query.split("&");
@@ -120,7 +116,7 @@ public class AudioStreamWebSocketHandler {
         return null;
     }
 
-    private void sendJson(Session session, Map<String, Object> obj) throws IOException {
+    private void sendJson(Session session, java.util.Map<String, Object> obj) throws IOException {
         if (session != null && session.isOpen()) {
             String json = objectMapper.writeValueAsString(obj);
             session.getBasicRemote().sendText(json);

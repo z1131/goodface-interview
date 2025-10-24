@@ -3,18 +3,23 @@ package com.deepknow.goodface.interview.domain.session;
 import com.deepknow.goodface.interview.domain.agent.AgentFactory;
 import com.deepknow.goodface.interview.domain.agent.DefaultInterviewAgent;
 import com.deepknow.goodface.interview.domain.agent.InterviewAgent;
+import com.deepknow.goodface.interview.domain.agent.AgentConfig;
+import com.deepknow.goodface.interview.domain.agent.AgentCallbacks;
 import com.deepknow.goodface.interview.domain.session.service.AudioStreamService;
+import com.deepknow.goodface.interview.domain.session.util.AnswerAccumulator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.deepknow.goodface.interview.domain.session.model.InterviewSession;
 import com.deepknow.goodface.interview.domain.session.model.SessionContext;
-import com.deepknow.goodface.interview.domain.session.model.InterviewMessage;
 import com.deepknow.goodface.interview.repo.mapper.InterviewSessionMapper;
-import com.deepknow.goodface.interview.repo.mapper.InterviewMessageMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 
+import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -25,158 +30,139 @@ import java.util.function.Consumer;
 
 @Service
 public class AudioStreamServiceImpl implements AudioStreamService {
-    private static final Logger log = LoggerFactory.getLogger(AudioStreamService.class);
+    private static final Logger logger = LoggerFactory.getLogger(AudioStreamServiceImpl.class);
 
-    private final AgentFactory agentFactory = new AgentFactory();
-    private final ConcurrentHashMap<String, InterviewAgent> sessions = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, StringBuilder> answerBufs = new ConcurrentHashMap<>();
+    private final AgentFactory interviewAgentFactory = new AgentFactory();
+    private final ConcurrentHashMap<String, InterviewAgent> activeAgents = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AnswerAccumulator> answerBuffers = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> wsToSessionId = new ConcurrentHashMap<>();
 
     private final InterviewSessionMapper sessionMapper;
-    private final InterviewMessageMapper messageMapper;
+    private final MessagePersistenceService persistenceService;
     private final ObjectMapper objectMapper;
-    // 异步持久化线程池（有界队列，避免阻塞主链路）
-    private final ExecutorService persistExecutor;
 
+    @Autowired
     public AudioStreamServiceImpl(InterviewSessionMapper sessionMapper,
-                                  InterviewMessageMapper messageMapper,
+                                  MessagePersistenceService persistenceService,
                                   ObjectMapper objectMapper) {
         this.sessionMapper = sessionMapper;
-        this.messageMapper = messageMapper;
+        this.persistenceService = persistenceService;
         this.objectMapper = objectMapper;
-        // 初始化持久化线程池：核心2，最大4，队列200；拒绝时直接丢弃并记录日志
-        ThreadFactory tf = r -> {
-            Thread t = new Thread(r, "persist-exec");
-            t.setDaemon(true);
-            return t;
-        };
-        this.persistExecutor = new ThreadPoolExecutor(
-                2, 4, 60, TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(200),
-                tf,
-                (r, exec) -> log.warn("Persist queue full, dropping task")
-        );
     }
 
     @Override
-    public void open(String wsSessionId, String sessionId,
-                     Consumer<String> onSttPartial,
-                     Consumer<String> onSttFinal,
-                     Consumer<String> onQuestion,
-                     Consumer<String> onAnswerDelta,
-                     Runnable onAnswerComplete,
-                     Consumer<Throwable> onError,
-                     Runnable onSttReady) {
-        InterviewSession found = null;
+    public void open(String webSocketSessionId, String interviewSessionId,
+                     Consumer<String> sttPartialHandler,
+                     Consumer<String> sttFinalHandler,
+                     Consumer<String> questionHandler,
+                     Consumer<String> answerDeltaHandler,
+                     Runnable answerCompleteHandler,
+                     Consumer<Throwable> errorHandler,
+                     Runnable sttReadyHandler) {
+        InterviewSession sessionRecord = null;
         try {
-            found = sessionMapper.findById(sessionId);
+            sessionRecord = sessionMapper.findById(interviewSessionId);
         } catch (Exception e) {
-            log.warn("Fetch session failed: {}", sessionId, e);
+            logger.warn("Fetch session failed: sessionId={}, wsSessionId={}", interviewSessionId, webSocketSessionId, e);
         }
-        final InterviewSession session = found;
-        if (session == null || session.getStatus() == null || !"ACTIVE".equalsIgnoreCase(session.getStatus())) {
-            if (onError != null) onError.accept(new IllegalStateException("SESSION_NOT_ACTIVE"));
+        final InterviewSession interviewSession = sessionRecord;
+        if (interviewSession == null || interviewSession.getStatus() == null || !"ACTIVE".equalsIgnoreCase(interviewSession.getStatus())) {
+            if (errorHandler != null) errorHandler.accept(new IllegalStateException("SESSION_NOT_ACTIVE"));
             return;
         }
 
-        java.util.Map<String, Object> cfg = java.util.Collections.emptyMap();
+        Map<String, Object> sessionConfig = Collections.emptyMap();
         try {
-            String cfgJson = session.getConfigJson();
-            if (cfgJson != null && !cfgJson.isEmpty()) {
-                cfg = objectMapper.readValue(cfgJson, new TypeReference<java.util.Map<String, Object>>(){});
+            String configJson = interviewSession.getConfigJson();
+            if (configJson != null && !configJson.isEmpty()) {
+                sessionConfig = objectMapper.readValue(configJson, new TypeReference<Map<String, Object>>(){});
             }
         } catch (Exception e) {
-            log.warn("Parse session config failed, use default", e);
+            logger.warn("Parse session config failed, use default: sessionId={}, wsSessionId={}", interviewSession.getId(), webSocketSessionId, e);
         }
 
-        SessionContext ctx = new SessionContext(session.getId(), session.getUserId(), session, cfg);
+        SessionContext sessionContext = new SessionContext(interviewSession.getId(), interviewSession.getUserId(), interviewSession, sessionConfig);
 
-        InterviewAgent agent = new DefaultInterviewAgent(agentFactory);
+        InterviewAgent interviewAgent = new DefaultInterviewAgent(interviewAgentFactory);
 
         // 建立答案缓冲用于持久化 assistant 完整输出
-        StringBuilder buf = new StringBuilder(1024);
-        answerBufs.put(wsSessionId, buf);
+        AnswerAccumulator answerAcc = new AnswerAccumulator();
+        answerBuffers.put(webSocketSessionId, answerAcc);
 
-        agent.start(
-                ctx,
-                onSttPartial,
-                fin -> {
-                    if (onSttFinal != null) onSttFinal.accept(fin);
-                    // 异步持久化用户消息，避免阻塞回调链路
-                    persistExecutor.execute(() -> {
-                        try {
-                            InterviewMessage msg = new InterviewMessage();
-                            msg.setSessionId(session.getId());
-                            msg.setRole("user");
-                            msg.setContent(fin);
-                            msg.setCreatedAt(java.time.LocalDateTime.now());
-                            messageMapper.insert(msg);
-                        } catch (Exception e) {
-                            log.warn("Persist user message failed", e);
-                        }
-                    });
-                },
-                onQuestion,
-                delta -> {
-                    synchronized (buf) { buf.append(delta == null ? "" : delta); }
-                    if (onAnswerDelta != null) onAnswerDelta.accept(delta);
-                },
-                () -> {
-                    // 持久化 assistant 完整答案
-                    String content;
-                    synchronized (buf) { content = buf.toString(); }
-                    // 异步持久化助手消息，避免阻塞完成事件
-                    final String toPersist = content;
-                    persistExecutor.execute(() -> {
-                        try {
-                            if (toPersist != null && !toPersist.isEmpty()) {
-                                InterviewMessage msg = new InterviewMessage();
-                                msg.setSessionId(session.getId());
-                                msg.setRole("assistant");
-                                msg.setContent(toPersist);
-                                msg.setCreatedAt(java.time.LocalDateTime.now());
-                                messageMapper.insert(msg);
-                            }
-                        } catch (Exception e) {
-                            log.warn("Persist assistant message failed", e);
-                        }
-                    });
-                    try {
-                        synchronized (buf) { buf.setLength(0); }
-                    } catch (Exception ignore) {}
-                    if (onAnswerComplete != null) onAnswerComplete.run();
-                },
-                ex -> {
-                    if (onError != null) onError.accept(ex);
-                },
-                onSttReady
+        // 将各类匿名回调拆分为具名处理器，提升可读性
+        Consumer<String> onFinalText = fin -> {
+            if (sttFinalHandler != null) {
+                sttFinalHandler.accept(fin);
+            }
+            // 异步持久化用户消息，避免阻塞回调链路
+            persistenceService.persistUser(interviewSession.getId(), fin);
+        };
+
+        Consumer<String> onAnswerDelta = delta -> {
+            answerAcc.append(delta);
+            if (answerDeltaHandler != null) {
+                answerDeltaHandler.accept(delta);
+            }
+        };
+
+        Runnable onAnswerComplete = () -> {
+            String full = answerAcc.drain();
+            persistenceService.persistAssistant(interviewSession.getId(), full);
+            if (answerCompleteHandler != null) {
+                answerCompleteHandler.run();
+            }
+        };
+
+        Consumer<Throwable> onError = ex -> {
+            if (errorHandler != null) {
+                errorHandler.accept(ex);
+            }
+        };
+
+        AgentConfig agentConfig = AgentConfig.from(sessionContext);
+        AgentCallbacks callbacks = AgentCallbacks.of(
+                sttPartialHandler,
+                onFinalText,
+                questionHandler,
+                onAnswerDelta,
+                onAnswerComplete,
+                onError,
+                sttReadyHandler
         );
-        sessions.put(wsSessionId, agent);
+        logger.info("Open session: wsSessionId={}, sessionId={}", webSocketSessionId, interviewSession.getId());
+        wsToSessionId.put(webSocketSessionId, interviewSession.getId());
+        interviewAgent.start(sessionContext, agentConfig, callbacks);
+        activeAgents.put(webSocketSessionId, interviewAgent);
     }
 
     @Override
-    public void onAudio(String wsSessionId, byte[] pcmChunk) {
-        InterviewAgent agent = sessions.get(wsSessionId);
+    public void onAudio(String webSocketSessionId, byte[] audioPcmChunk) {
+        InterviewAgent agent = activeAgents.get(webSocketSessionId);
         if (agent != null) {
-            agent.sendAudio(pcmChunk);
+            logger.trace("Forward audio: wsSessionId={}, sessionId={}, bytes={}", webSocketSessionId, wsToSessionId.get(webSocketSessionId), audioPcmChunk == null ? 0 : audioPcmChunk.length);
+            agent.sendAudio(audioPcmChunk);
         } else {
-            log.debug("Audio arrived for unknown session {}", wsSessionId);
+            String sid = wsToSessionId.get(webSocketSessionId);
+            logger.debug("Audio arrived for unknown session: wsSessionId={}, sessionId={}", webSocketSessionId, sid);
         }
     }
 
     @Override
-    public void flush(String wsSessionId) {
-        InterviewAgent agent = sessions.get(wsSessionId);
+    public void flush(String webSocketSessionId) {
+        InterviewAgent agent = activeAgents.get(webSocketSessionId);
         if (agent != null) {
-            try { agent.flush(); } catch (Exception e) { log.warn("Flush error", e); }
+            try { agent.flush(); } catch (Exception e) { logger.warn("Flush error: wsSessionId={}, sessionId={}", webSocketSessionId, wsToSessionId.get(webSocketSessionId), e); }
         }
     }
 
     @Override
-    public void close(String wsSessionId) {
-        InterviewAgent agent = sessions.remove(wsSessionId);
+    public void close(String webSocketSessionId) {
+        InterviewAgent agent = activeAgents.remove(webSocketSessionId);
+        String sessionId = wsToSessionId.remove(webSocketSessionId);
         if (agent != null) {
-            try { agent.close(); } catch (Exception e) { log.warn("Agent close error", e); }
+            try { agent.close(); } catch (Exception e) { logger.warn("Agent close error: wsSessionId={}, sessionId={}", webSocketSessionId, sessionId, e); }
         }
-        answerBufs.remove(wsSessionId);
+        logger.info("Closed session: wsSessionId={}, sessionId={}", webSocketSessionId, sessionId);
+        answerBuffers.remove(webSocketSessionId);
     }
 }

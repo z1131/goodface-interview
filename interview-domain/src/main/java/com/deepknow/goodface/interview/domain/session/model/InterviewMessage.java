@@ -12,4 +12,9 @@ public class InterviewMessage {
     private String role; // user, assistant, system
     private String content;
     private LocalDateTime createdAt;
+
+    public void setSessionId(String sessionId) { this.sessionId = sessionId; }
+    public void setRole(String role) { this.role = role; }
+    public void setContent(String content) { this.content = content; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

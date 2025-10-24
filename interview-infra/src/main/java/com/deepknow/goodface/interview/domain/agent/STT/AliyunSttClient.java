@@ -24,6 +24,7 @@ public class AliyunSttClient implements SttClient {
     private String model;
     private int sampleRate;
     private String language;
+    private String sessionId;
 
     private Consumer<String> onPartial;
     private Consumer<String> onFinal;
@@ -60,6 +61,7 @@ public class AliyunSttClient implements SttClient {
 
     @Override
     public void startSession(String sessionId, Consumer<String> onPartial, Consumer<String> onFinal, Consumer<Throwable> onError, Runnable onReady) {
+        this.sessionId = sessionId;
         this.onPartial = onPartial;
         this.onFinal = onFinal;
         this.onError = onError;
@@ -82,28 +84,28 @@ public class AliyunSttClient implements SttClient {
                             }
                         }
                     } catch (Exception e) {
-                        log.warn("Handle transcription result failed", e);
+                        log.warn("Handle transcription result failed. sessionId=" + AliyunSttClient.this.sessionId, e);
                     }
                 }
 
                 @Override
                 public void onComplete() {
-                    log.info("Aliyun STT transcription complete");
+                    log.info("Aliyun STT transcription complete. sessionId={}", AliyunSttClient.this.sessionId);
                 }
 
                 @Override
                 public void onError(Exception e) {
-                    log.error("Aliyun STT error", e);
+                    log.error("Aliyun STT error. sessionId=" + AliyunSttClient.this.sessionId, e);
                     startupFailed = true;
                     if (AliyunSttClient.this.onError != null) AliyunSttClient.this.onError.accept(e);
                 }
             };
             translator.call(param, callback);
-            log.info("Aliyun STT session started");
+            log.info("Aliyun STT session started. sessionId={}", this.sessionId);
             // 使用官方 SDK 的实时识别（含 VAD 断句），连接建立后即视为就绪
             ready = true;
             if (onReady != null) {
-                try { onReady.run(); } catch (Exception e) { log.warn("Emit onReady failed", e); }
+                try { onReady.run(); } catch (Exception e) { log.warn("Emit onReady failed. sessionId=" + this.sessionId, e); }
             }
             // 将缓冲的音频帧依次发送
             byte[] buf;
@@ -111,31 +113,30 @@ public class AliyunSttClient implements SttClient {
                 try {
                     translator.sendAudioFrame(ByteBuffer.wrap(buf));
                 } catch (Exception e) {
-                    log.warn("Drain buffered frame failed", e);
+                    log.warn("Drain buffered frame failed. sessionId=" + this.sessionId, e);
                 }
             }
         } catch (Exception e) {
-            log.error("Start Aliyun STT session failed", e);
+            log.error("Start Aliyun STT session failed. sessionId=" + this.sessionId, e);
             if (this.onError != null) this.onError.accept(e);
         }
     }
 
     @Override
     public void sendAudio(byte[] pcmChunk) {
-        try {
-            if (translator == null) return;
-            if (!ready) {
-                // 缓冲未就绪的音频帧，设置上限避免无限增长
-                if (pending.size() >= maxPendingFrames) {
-                    pending.poll();
-                }
-                pending.offer(Arrays.copyOf(pcmChunk, pcmChunk.length));
-                return;
+        if (pcmChunk == null || pcmChunk.length == 0) return;
+        if (!ready || startupFailed || translator == null) {
+            if (pending.size() < maxPendingFrames) {
+                pending.add(Arrays.copyOf(pcmChunk, pcmChunk.length));
+            } else {
+                log.debug("Drop pending frame due to capacity. sessionId={}", this.sessionId);
             }
+            return;
+        }
+        try {
             translator.sendAudioFrame(ByteBuffer.wrap(pcmChunk));
         } catch (Exception e) {
-            log.warn("sendAudio failed", e);
-            if (onError != null) onError.accept(e);
+            log.warn("Send audio frame failed. sessionId=" + this.sessionId, e);
         }
     }
 
@@ -144,10 +145,10 @@ public class AliyunSttClient implements SttClient {
         try {
             if (translator != null) {
                 translator.stop();
-                log.info("Aliyun STT stop sent");
+                log.info("Aliyun STT stop sent. sessionId={}", this.sessionId);
             }
         } catch (Exception e) {
-            log.error("Failed to stop STT", e);
+            log.error("Failed to stop STT. sessionId=" + this.sessionId, e);
             if (onError != null) onError.accept(e);
         }
     }
@@ -159,7 +160,7 @@ public class AliyunSttClient implements SttClient {
                 translator.getDuplexApi().close(1000, "bye");
             }
         } catch (Exception e) {
-            log.warn("Close Aliyun STT failed", e);
+            log.warn("Close Aliyun STT failed. sessionId=" + this.sessionId, e);
         } finally {
             translator = null;
             ready = false;

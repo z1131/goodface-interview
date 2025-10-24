@@ -4,7 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "stt")
 public class SttConfigProperties {
-    private String provider = "mock"; // aliyun | mock
+    private String provider = "aliyun"; // aliyun
     private String apiKeyEnv = "DASHSCOPE_API_KEY";
     private String apiKey; // 直接配置的密钥（优先级高于 apiKeyEnv）
     private String model = "gummy-realtime-v1";

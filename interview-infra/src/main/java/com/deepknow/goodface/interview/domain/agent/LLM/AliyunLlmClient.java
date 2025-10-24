@@ -33,6 +33,9 @@ public class AliyunLlmClient implements LlmClient {
     private double topP;
     private int maxTokens;
     private boolean streaming;
+    private String sessionId;
+
+    public void setSessionId(String sessionId) { this.sessionId = sessionId; }
 
     @Override
     public void init(String apiKey, String model, double temperature, double topP, int maxTokens, boolean streaming) {
@@ -43,50 +46,49 @@ public class AliyunLlmClient implements LlmClient {
         this.maxTokens = maxTokens;
         this.streaming = streaming;
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-        log.info("LLM init: model={}, temperature={}, topP={}, maxTokens={}, streaming={}",
-                model, temperature, topP, maxTokens, streaming);
+        log.info("LLM init: model={} temperature={} topP={} maxTokens={} streaming={} sessionId={}",
+                model, temperature, topP, maxTokens, streaming, this.sessionId);
     }
 
+    private String preview(String s, int max) {
+        if (s == null) return "";
+        if (s.length() <= max) return s;
+        return s.substring(0, Math.max(0, max));
+    }
 
-        @Override
-        public String extractQuestion(String text, String context) {
-            try {
-                log.info("LLM extractQuestion start: textLen={}", text == null ? 0 : text.length());
-                String system = "你是一名严谨的面试问题提取器。基于候选人与面试官的中文对话转写文本，" +
-                        "在存在识别误差的情况下也要尽量还原面试官的真实提问。只有当识别出的提问与最近几轮问题不同，才输出新问题；否则严格输出‘无问题’。" +
-                        "输出必须为以下两种之一：\n" +
-                        "1）‘无问题’\n2）按‘问题:xxx’的中文格式给出个问题。";
-                String prompt = "输入：" + text +
-                        "\n用户提示词与最近问题上下文：" + safe(context) +
-                        "\n请按上述格式输出：";
-                JsonNode resp = call(model, system, prompt);
-                String result = pickText(resp);
-                log.info("LLM extractQuestion done: resultLen={} preview=\"{}\"",
-                        result == null ? 0 : result.length(), preview(result, 80));
-                log.debug("LLM extractQuestion content: {}", result);
-                return result;
-            } catch (Exception e) {
-                log.warn("extractQuestion failed", e);
-                return null;
+    @Override
+    public String extractQuestion(String text, String context) {
+        try {
+            String system = "你是面试问题识别器，从文本中识别是否包含明确问题，若有则抽取该问题。";
+            String user = "文本：" + (text == null ? "" : text) + "\n上下文：" + (context == null ? "" : context) + "\n请返回识别到的问题或返回'无问题'。";
+            JsonNode root = call(model, system, user);
+            JsonNode output = root.path("output").path("choices");
+            if (output.isArray() && output.size() > 0) {
+                JsonNode content = output.get(0).path("message").path("content");
+                return content.asText("");
             }
+            return "无问题";
+        } catch (Exception e) {
+            log.warn("LLM extractQuestion failed. sessionId=" + this.sessionId, e);
+            return "无问题";
         }
+    }
 
     @Override
     public String generateAnswer(String question, String context) {
         try {
-            log.info("LLM generateAnswer start: qLen={} ctxLen={}",
-                    question == null ? 0 : question.length(), context == null ? 0 : context.length());
-            String system = "你是面试候选人助手，基于提供的背景与岗位需求，生成简洁、专业的中文回答，避免虚构事实。你只需回答当前的问题，上下文当作参考，因为当前的问题可能是上下文的延伸";
-            String prompt = "问题：" + safe(question) + "\n上下文：" + safe(context) + "\n请直接给出答案：";
-            JsonNode resp = call(model, system, prompt);
-            String result = pickText(resp);
-            log.info("LLM generateAnswer done: resultLen={} preview=\"{}\"",
-                    result == null ? 0 : result.length(), preview(result, 120));
-            log.debug("LLM generateAnswer content: {}", result);
-            return result;
+            String system = "你是面试候选人助手，基于提供的背景与岗位需求，生成简洁、具体、专业的中文回答，避免虚构事实。";
+            String user = "问题：" + (question == null ? "" : question) + "\n上下文：" + (context == null ? "" : context) + "\n请直接给出答案：";
+            JsonNode root = call(model, system, user);
+            JsonNode output = root.path("output").path("choices");
+            if (output.isArray() && output.size() > 0) {
+                JsonNode content = output.get(0).path("message").path("content");
+                return content.asText("");
+            }
+            return "";
         } catch (Exception e) {
-            log.warn("generateAnswer failed", e);
-            return null;
+            log.warn("LLM generateAnswer failed. sessionId=" + this.sessionId, e);
+            return "";
         }
     }
 
@@ -120,7 +122,7 @@ public class AliyunLlmClient implements LlmClient {
                 .build();
 
         HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        log.info("LLM call status: {} model={} streaming=false", resp.statusCode(), model);
+        log.info("LLM call status: {} model={} streaming=false sessionId={}", resp.statusCode(), model, this.sessionId);
         if (resp.statusCode() / 100 != 2) {
             throw new RuntimeException("LLM HTTP " + resp.statusCode() + ": " + resp.body());
         }
@@ -128,42 +130,8 @@ public class AliyunLlmClient implements LlmClient {
         try {
             return mapper.readTree(bodyStr);
         } finally {
-            log.debug("LLM call body preview: {}", preview(bodyStr, 200));
+            log.debug("LLM call body preview: {} sessionId={}", preview(bodyStr, 200), this.sessionId);
         }
-    }
-
-    private String pickText(JsonNode resp) {
-        if (resp == null) return null;
-        // 兼容多种返回结构：output_text 或 choices[0].message.content
-        // 同时兼容 DashScope 原生结构：output.text 或 output.choices[0].message.content
-        String t = null;
-        // 顶层扁平字段
-        JsonNode outTextFlat = resp.path("output_text");
-        if (outTextFlat.isTextual()) t = outTextFlat.asText();
-        // 顶层 choices.message.content
-        if (isNullOrEmpty(t)) {
-            JsonNode choicesTop = resp.path("choices");
-            if (choicesTop.isArray() && choicesTop.size() > 0) {
-                JsonNode msg = choicesTop.get(0).path("message");
-                t = msg.path("content").asText(null);
-            }
-        }
-        // output.text
-        if (isNullOrEmpty(t)) {
-            JsonNode output = resp.path("output");
-            JsonNode text = output.path("text");
-            if (text.isTextual()) t = text.asText();
-        }
-        // output.choices[0].message.content
-        if (isNullOrEmpty(t)) {
-            JsonNode output = resp.path("output");
-            JsonNode choices = output.path("choices");
-            if (choices.isArray() && choices.size() > 0) {
-                JsonNode msg = choices.get(0).path("message");
-                t = msg.path("content").asText(null);
-            }
-        }
-        return t;
     }
 
     private String safe(String s) { return s == null ? "" : s; }
@@ -177,9 +145,9 @@ public class AliyunLlmClient implements LlmClient {
                                      Runnable onComplete,
                                      java.util.function.Consumer<Throwable> onError) {
         try {
-            log.info("LLM stream start: model={} qLen={} ctxLen={} temp={} topP={} maxTokens={}",
+            log.info("LLM stream start: model={} qLen={} ctxLen={} temp={} topP={} maxTokens={} sessionId={}",
                     model, question == null ? 0 : question.length(), context == null ? 0 : context.length(),
-                    temperature, topP, maxTokens);
+                    temperature, topP, maxTokens, this.sessionId);
             String system = "你是面试候选人助手，基于提供的背景与岗位需求，生成简洁、具体、专业的中文回答，避免虚构事实。";
             String user = "问题：" + safe(question) + "\n上下文：" + safe(context) + "\n请直接给出答案：";
 
@@ -214,7 +182,7 @@ public class AliyunLlmClient implements LlmClient {
                     .build();
 
             HttpResponse<java.io.InputStream> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofInputStream());
-            log.info("LLM stream status: {} model={}", resp.statusCode(), model);
+            log.info("LLM stream status: {} model={} sessionId={}", resp.statusCode(), model, this.sessionId);
             if (resp.statusCode() / 100 != 2) {
                 String errBody = "";
                 try (java.io.InputStream es = resp.body()) {
@@ -225,77 +193,184 @@ public class AliyunLlmClient implements LlmClient {
 
             int chunkCount = 0;
             int totalChars = 0;
-            try (java.io.InputStream is = resp.body();
-                 java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(is, StandardCharsets.UTF_8))) {
+
+            try (java.io.InputStream is = resp.body()) {
+                java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(is, StandardCharsets.UTF_8));
                 String line;
                 while ((line = br.readLine()) != null) {
-                    if (line == null) break;
-                    line = line.trim();
-                    if (line.isEmpty()) continue;
-                    if (!line.startsWith("data:")) continue;
-                    String data = line.substring(5).trim();
-                    if ("[DONE]".equalsIgnoreCase(data)) {
-                        log.info("LLM stream complete: chunks={} totalChars={}", chunkCount, totalChars);
-                        if (onComplete != null) onComplete.run();
-                        break;
-                    }
-                    try {
-                        JsonNode node = mapper.readTree(data);
-                        // 兼容不同结构：优先增量文本字段 / 退化到 output.text / output.choices[].message.content / 顶层扁平
-                        String deltaText = null;
-                        // 顶层增量/完整文本（有些模型会扁平化）
-                        if (node.path("output_delta_text").isTextual()) {
-                            deltaText = node.path("output_delta_text").asText();
-                        }
-                        if (isNullOrEmpty(deltaText) && node.path("output_text").isTextual()) {
-                            deltaText = node.path("output_text").asText();
-                        }
-                        // output.text
-                        if (isNullOrEmpty(deltaText)) {
-                            JsonNode out = node.path("output");
-                            if (out.path("text").isTextual()) {
-                                deltaText = out.path("text").asText();
+                    if (line.startsWith("data:")) {
+                        String data = line.substring(5).trim();
+                        if (!data.isEmpty() && !"[DONE]".equalsIgnoreCase(data)) {
+                            try {
+                                JsonNode node = mapper.readTree(data);
+                                JsonNode choices = node.path("output").path("choices");
+                                if (choices.isArray() && choices.size() > 0) {
+                                    JsonNode msg = choices.get(0).path("message").path("content");
+                                    String delta = msg.asText("");
+                                    if (delta != null && !delta.isEmpty()) {
+                                        chunkCount++;
+                                        totalChars += delta.length();
+                                        if (onDelta != null) onDelta.accept(delta);
+                                    }
+                                }
+                            } catch (Exception e) {
+                                log.warn("LLM stream parse failed. sessionId=" + this.sessionId, e);
                             }
                         }
-                        // output.choices[0].message.content
-                        if (isNullOrEmpty(deltaText)) {
-                            JsonNode choices = node.path("output").path("choices");
-                            if (choices.isArray() && choices.size() > 0) {
-                                JsonNode msg = choices.get(0).path("message");
-                                deltaText = msg.path("content").asText(null);
-                            }
-                        }
-                        // 顶层 choices[0].message.content（兼容）
-                        if (isNullOrEmpty(deltaText)) {
-                            JsonNode choices = node.path("choices");
-                            if (choices.isArray() && choices.size() > 0) {
-                                JsonNode msg = choices.get(0).path("message");
-                                deltaText = msg.path("content").asText(null);
-                            }
-                        }
-                        if (deltaText != null && !deltaText.isEmpty()) {
-                            chunkCount++;
-                            totalChars += deltaText.length();
-                            log.info("LLM stream delta: len={} preview=\"{}\"", deltaText.length(), preview(deltaText, 80));
-                            log.debug("LLM stream delta content: {}", deltaText);
-                            if (onDelta != null) onDelta.accept(deltaText);
-                        }
-                    } catch (Exception parseEx) {
-                        log.warn("parse stream chunk failed: {}", parseEx.getMessage());
                     }
                 }
             }
+
+            log.info("LLM stream end: chunks={} totalChars={} sessionId={}", chunkCount, totalChars, this.sessionId);
+            if (onComplete != null) onComplete.run();
         } catch (Exception e) {
-            log.warn("LLM stream error: {}", e.getMessage());
+            log.warn("LLM stream failed. sessionId=" + this.sessionId, e);
             if (onError != null) onError.accept(e);
         }
     }
 
-    private String preview(String s, int max) {
-        if (s == null) return "";
-        String t = s.replaceAll("\n", " ");
-        return t.length() <= max ? t : t.substring(0, max) + "...";
+    @Override
+    public com.deepknow.goodface.interview.domain.agent.EquivalenceResult judgeQuestionEquivalence(String lastQuestion, String candidate, String context) {
+        try {
+            String system = "你是面试问题去重器与规范化器。任务：根据‘最近问题’‘当前输入’‘上下文’判断是否为同题或只是补充，不要产生新问题。仅当确认为新问题时返回 NEW；否则返回 SAME 或 ELABORATION；若不存在问题返回 NONE。请严格输出 JSON。";
+            String user = "最近问题：" + safe(lastQuestion) +
+                    "\n当前输入：" + safe(candidate) +
+                    "\n上下文：" + safe(context) +
+                    "\n请返回 JSON：{\"class\": \"SAME|ELABORATION|NEW|NONE\", \"canonical\": \"...\", \"reason\": \"...\"}";
+            JsonNode root = call(model, system, user);
+            JsonNode output = root.path("output").path("choices");
+            String content = null;
+            if (output.isArray() && output.size() > 0) {
+                content = output.get(0).path("message").path("content").asText("");
+            }
+            if (content == null || content.isEmpty()) {
+                log.warn("LLM judgeQuestionEquivalence empty content. sessionId={}", this.sessionId);
+                return new com.deepknow.goodface.interview.domain.agent.EquivalenceResult("SAME", safe(candidate), "empty content");
+            }
+            JsonNode json;
+            try { json = mapper.readTree(content); } catch (Exception e) {
+                int start = content.indexOf('{');
+                int end = content.lastIndexOf('}');
+                if (start >= 0 && end > start) {
+                    String sub = content.substring(start, end + 1);
+                    try { json = mapper.readTree(sub); } catch (Exception e2) {
+                        log.warn("LLM judgeQuestionEquivalence parse failed. content preview={} sessionId={}", preview(content, 120), this.sessionId);
+                        return new com.deepknow.goodface.interview.domain.agent.EquivalenceResult("SAME", safe(candidate), "parse failed");
+                    }
+                } else {
+                    log.warn("LLM judgeQuestionEquivalence no json found. content preview={} sessionId={}", preview(content, 120), this.sessionId);
+                    return new com.deepknow.goodface.interview.domain.agent.EquivalenceResult("SAME", safe(candidate), "no json");
+                }
+            }
+            String clazz = json.path("class").asText("SAME");
+            String canonical = json.path("canonical").asText(safe(candidate));
+            String reason = json.path("reason").asText("");
+            String cUpper = clazz == null ? "SAME" : clazz.trim().toUpperCase();
+            if (!("NEW".equals(cUpper) || "SAME".equals(cUpper) || "ELABORATION".equals(cUpper) || "NONE".equals(cUpper))) {
+                cUpper = "SAME";
+            }
+            com.deepknow.goodface.interview.domain.agent.EquivalenceResult res = new com.deepknow.goodface.interview.domain.agent.EquivalenceResult(cUpper, canonical, reason);
+            log.info("LLM judgeQuestionEquivalence: {} sessionId={}", res, this.sessionId);
+            return res;
+        } catch (Exception e) {
+            log.warn("LLM judgeQuestionEquivalence failed. sessionId=" + this.sessionId, e);
+            return new com.deepknow.goodface.interview.domain.agent.EquivalenceResult("SAME", safe(candidate), "exception");
+        }
     }
 
-    private boolean isNullOrEmpty(String s) { return s == null || s.isEmpty(); }
+    @Override
+    public com.deepknow.goodface.interview.domain.agent.EquivalenceResult judgeSegmentRelation(String lastQuestion, String segment, String context) {
+        try {
+            String system = "你是段落关系判定器。当没有明确问题时，判断该段落是否是为最近问题的补充。仅在补充时返回 ELABORATION，否则返回 NONE。严格输出 JSON。";
+            String user = "最近问题：" + safe(lastQuestion) +
+                    "\n当前段落：" + safe(segment) +
+                    "\n上下文：" + safe(context) +
+                    "\n请返回 JSON：{\"class\": \"ELABORATION|NONE\", \"reason\": \"...\"}";
+            JsonNode root = call(model, system, user);
+            JsonNode output = root.path("output").path("choices");
+            String content = null;
+            if (output.isArray() && output.size() > 0) {
+                content = output.get(0).path("message").path("content").asText("");
+            }
+            if (content == null || content.isEmpty()) {
+                log.warn("LLM judgeSegmentRelation empty content. sessionId={}", this.sessionId);
+                return new com.deepknow.goodface.interview.domain.agent.EquivalenceResult("NONE", "", "empty content");
+            }
+            JsonNode json;
+            try { json = mapper.readTree(content); } catch (Exception e) {
+                int start = content.indexOf('{');
+                int end = content.lastIndexOf('}');
+                if (start >= 0 && end > start) {
+                    String sub = content.substring(start, end + 1);
+                    try { json = mapper.readTree(sub); } catch (Exception e2) {
+                        log.warn("LLM judgeSegmentRelation parse failed. content preview={} sessionId={}", preview(content, 120), this.sessionId);
+                        return new com.deepknow.goodface.interview.domain.agent.EquivalenceResult("NONE", "", "parse failed");
+                    }
+                } else {
+                    log.warn("LLM judgeSegmentRelation no json found. content preview={} sessionId={}", preview(content, 120), this.sessionId);
+                    return new com.deepknow.goodface.interview.domain.agent.EquivalenceResult("NONE", "", "no json");
+                }
+            }
+            String clazz = json.path("class").asText("NONE");
+            String reason = json.path("reason").asText("");
+            String cUpper = clazz == null ? "NONE" : clazz.trim().toUpperCase();
+            if (!("ELABORATION".equals(cUpper) || "NONE".equals(cUpper))) {
+                cUpper = "NONE";
+            }
+            com.deepknow.goodface.interview.domain.agent.EquivalenceResult res = new com.deepknow.goodface.interview.domain.agent.EquivalenceResult(cUpper, "", reason);
+            log.info("LLM judgeSegmentRelation: {} sessionId={}", res, this.sessionId);
+            return res;
+        } catch (Exception e) {
+            log.warn("LLM judgeSegmentRelation failed. sessionId=" + this.sessionId, e);
+            return new com.deepknow.goodface.interview.domain.agent.EquivalenceResult("NONE", "", "exception");
+        }
+    }
+
+    @Override
+    public com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult updateContextMemory(String currentQuestion, String accumulatedContext, String recentContext) {
+        try {
+            String system = "你是对话摘要与事实抽取器。基于当前问题与已有上下文，生成简洁的滚动摘要（中文，3-5 条要点），并抽取关键事实为键值对。严格输出 JSON。";
+            String user = "当前问题：" + safe(currentQuestion) +
+                    "\n已累积上下文：" + safe(accumulatedContext) +
+                    "\n最近上下文：" + safe(recentContext) +
+                    "\n请返回 JSON：{\"summary\": \"...\", \"facts\": {\"key\": \"value\"}}";
+            JsonNode root = call(model, system, user);
+            JsonNode output = root.path("output").path("choices");
+            String content = null;
+            if (output.isArray() && output.size() > 0) {
+                content = output.get(0).path("message").path("content").asText("");
+            }
+            if (content == null || content.isEmpty()) {
+                log.warn("LLM updateContextMemory empty content. sessionId={}", this.sessionId);
+                return new com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult("", java.util.Collections.emptyMap());
+            }
+            JsonNode json;
+            try { json = mapper.readTree(content); } catch (Exception e) {
+                int start = content.indexOf('{');
+                int end = content.lastIndexOf('}');
+                if (start >= 0 && end > start) {
+                    String sub = content.substring(start, end + 1);
+                    try { json = mapper.readTree(sub); } catch (Exception e2) {
+                        log.warn("LLM updateContextMemory parse failed. content preview={} sessionId={}", preview(content, 120), this.sessionId);
+                        return new com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult("", java.util.Collections.emptyMap());
+                    }
+                } else {
+                    log.warn("LLM updateContextMemory no json found. content preview={} sessionId={}", preview(content, 120), this.sessionId);
+                    return new com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult("", java.util.Collections.emptyMap());
+                }
+            }
+            String summary = json.path("summary").asText("");
+            java.util.Map<String, String> facts = new java.util.HashMap<>();
+            JsonNode factsNode = json.path("facts");
+            if (factsNode.isObject()) {
+                factsNode.fields().forEachRemaining(e -> facts.put(e.getKey(), e.getValue().asText("")));
+            }
+            com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult res = new com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult(summary, facts);
+            log.info("LLM updateContextMemory: {} sessionId={}", res, this.sessionId);
+            return res;
+        } catch (Exception e) {
+            log.warn("LLM updateContextMemory failed. sessionId=" + this.sessionId, e);
+            return new com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult("", java.util.Collections.emptyMap());
+        }
+    }
 }
