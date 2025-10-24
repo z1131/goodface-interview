@@ -104,8 +104,25 @@ public class AudioStreamWebSocketHandler {
     @OnMessage
     public void onTextMessage(String text, Session session) {
         log.trace("Received text: {}", text);
-        // 控制帧示例：{"type":"control","action":"end"}
-        // 可根据需要扩展暂停/恢复等
+        
+        try {
+            // 检查是否为心跳ping消息
+            if (text.contains("\"type\":\"ping\"")) {
+                // 响应pong消息
+                if (session != null && session.isOpen()) {
+                    String pongResponse = "{\"type\":\"pong\",\"timestamp\":" + System.currentTimeMillis() + "}";
+                    session.getAsyncRemote().sendText(pongResponse);
+                    log.debug("Responded to heartbeat ping for session: {}", session.getId());
+                }
+                return;
+            }
+            
+            // 处理其他控制帧，例如：{"type":"control","action":"end"}
+            // 可根据需要扩展暂停/恢复等功能
+            
+        } catch (Exception e) {
+            log.warn("Error processing text message: {}", e.getMessage(), e);
+        }
     }
 
     @OnClose
