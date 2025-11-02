@@ -278,31 +278,36 @@ public class DefaultInterviewAgent implements InterviewAgent {
             boolean isNoQuestion = question != null && "无问题".equals(question.trim());
             boolean isNewEnough;
             if (llmSimilarityEnabled && !isNoQuestion && normQ != null && !normQ.isEmpty()) {
-                com.deepknow.goodface.interview.domain.agent.EquivalenceResult eq = llmClient.judgeQuestionEquivalence(lastQuestion, question, ctxStr);
-                String clazz = (eq == null || eq.getClazz() == null) ? "SAME" : eq.getClazz().trim().toUpperCase();
-                if ("NONE".equals(clazz)) {
-                    isNoQuestion = true;
-                    isNewEnough = false;
-                } else if ("NEW".equals(clazz)) {
+                // 如果 lastQuestion 为空,说明这是第一个问题,直接标记为 NEW
+                if (lastQuestion == null || lastQuestion.trim().isEmpty()) {
                     isNewEnough = true;
-                    String canonical = (eq.getCanonical() == null || eq.getCanonical().isEmpty()) ? question : eq.getCanonical();
-                    normQ = normalize(canonical);
-                    question = canonical;
                 } else {
-                    isNewEnough = false;
-                    if ("ELABORATION".equals(clazz)) {
-                        // 累积补充并更新记忆
-                        ctxBuilder.addElaborationText(combined);
-                        try {
-                            com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult mem = llmClient.updateContextMemory(lastQuestion, ctxBuilder.getRollingSummary(), ctxStr);
-                            if (mem != null) {
-                                String summary = mem.getSummary();
-                                if (summary != null && !summary.isEmpty()) ctxBuilder.addElaborationText(summary);
-                                java.util.Map<String, String> facts = mem.getFacts();
-                                if (facts != null && !facts.isEmpty()) ctxBuilder.mergeFacts(facts);
+                    com.deepknow.goodface.interview.domain.agent.EquivalenceResult eq = llmClient.judgeQuestionEquivalence(lastQuestion, question, ctxStr);
+                    String clazz = (eq == null || eq.getClazz() == null) ? "SAME" : eq.getClazz().trim().toUpperCase();
+                    if ("NONE".equals(clazz)) {
+                        isNoQuestion = true;
+                        isNewEnough = false;
+                    } else if ("NEW".equals(clazz)) {
+                        isNewEnough = true;
+                        String canonical = (eq.getCanonical() == null || eq.getCanonical().isEmpty()) ? question : eq.getCanonical();
+                        normQ = normalize(canonical);
+                        question = canonical;
+                    } else {
+                        isNewEnough = false;
+                        if ("ELABORATION".equals(clazz)) {
+                            // 累积补充并更新记忆
+                            ctxBuilder.addElaborationText(combined);
+                            try {
+                                com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult mem = llmClient.updateContextMemory(lastQuestion, ctxBuilder.getRollingSummary(), ctxStr);
+                                if (mem != null) {
+                                    String summary = mem.getSummary();
+                                    if (summary != null && !summary.isEmpty()) ctxBuilder.addElaborationText(summary);
+                                    java.util.Map<String, String> facts = mem.getFacts();
+                                    if (facts != null && !facts.isEmpty()) ctxBuilder.mergeFacts(facts);
+                                }
+                            } catch (Exception e) {
+                                log.debug("Memory update error ignored. sessionId={}", sessionId, e);
                             }
-                        } catch (Exception e) {
-                            log.debug("Memory update error ignored. sessionId={}", sessionId, e);
                         }
                     }
                 }
@@ -430,31 +435,36 @@ public class DefaultInterviewAgent implements InterviewAgent {
             boolean isNoQuestion = question != null && "无问题".equals(question.trim());
             boolean isNewEnough;
             if (llmSimilarityEnabled && !isNoQuestion && normQ != null && !normQ.isEmpty()) {
-                com.deepknow.goodface.interview.domain.agent.EquivalenceResult eq = llmClient.judgeQuestionEquivalence(lastQuestion, question, ctxStr);
-                String clazz = (eq == null || eq.getClazz() == null) ? "SAME" : eq.getClazz().trim().toUpperCase();
-                if ("NONE".equals(clazz)) {
-                    isNoQuestion = true;
-                    isNewEnough = false;
-                } else if ("NEW".equals(clazz)) {
+                // 如果 lastQuestion 为空,说明这是第一个问题,直接标记为 NEW
+                if (lastQuestion == null || lastQuestion.trim().isEmpty()) {
                     isNewEnough = true;
-                    String canonical = (eq.getCanonical() == null || eq.getCanonical().isEmpty()) ? question : eq.getCanonical();
-                    normQ = normalize(canonical);
-                    question = canonical;
                 } else {
-                    isNewEnough = false;
-                    if ("ELABORATION".equals(clazz)) {
-                        // 累积补充并更新记忆
-                        ctxBuilder.addElaborationText(segment);
-                        try {
-                            com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult mem = llmClient.updateContextMemory(lastQuestion, ctxBuilder.getRollingSummary(), ctxStr);
-                            if (mem != null) {
-                                String summary = mem.getSummary();
-                                if (summary != null && !summary.isEmpty()) ctxBuilder.addElaborationText(summary);
-                                java.util.Map<String, String> facts = mem.getFacts();
-                                if (facts != null && !facts.isEmpty()) ctxBuilder.mergeFacts(facts);
+                    com.deepknow.goodface.interview.domain.agent.EquivalenceResult eq = llmClient.judgeQuestionEquivalence(lastQuestion, question, ctxStr);
+                    String clazz = (eq == null || eq.getClazz() == null) ? "SAME" : eq.getClazz().trim().toUpperCase();
+                    if ("NONE".equals(clazz)) {
+                        isNoQuestion = true;
+                        isNewEnough = false;
+                    } else if ("NEW".equals(clazz)) {
+                        isNewEnough = true;
+                        String canonical = (eq.getCanonical() == null || eq.getCanonical().isEmpty()) ? question : eq.getCanonical();
+                        normQ = normalize(canonical);
+                        question = canonical;
+                    } else {
+                        isNewEnough = false;
+                        if ("ELABORATION".equals(clazz)) {
+                            // 累积补充并更新记忆
+                            ctxBuilder.addElaborationText(segment);
+                            try {
+                                com.deepknow.goodface.interview.domain.agent.MemoryUpdateResult mem = llmClient.updateContextMemory(lastQuestion, ctxBuilder.getRollingSummary(), ctxStr);
+                                if (mem != null) {
+                                    String summary = mem.getSummary();
+                                    if (summary != null && !summary.isEmpty()) ctxBuilder.addElaborationText(summary);
+                                    java.util.Map<String, String> facts = mem.getFacts();
+                                    if (facts != null && !facts.isEmpty()) ctxBuilder.mergeFacts(facts);
+                                }
+                            } catch (Exception e) {
+                                log.debug("Memory update error ignored. sessionId={}", sessionId, e);
                             }
-                        } catch (Exception e) {
-                            log.debug("Memory update error ignored. sessionId={}", sessionId, e);
                         }
                     }
                 }
