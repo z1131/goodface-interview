@@ -67,98 +67,114 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.5.1
+
+      - name: Copy docker-compose to ECS-1
+        uses: appleboy/scp-action@v0.1.7
         with:
-          ssh-private-key: ${{ secrets.ECS_SSH_KEY }}
+          host: ${{ secrets.ECS_HOST_1 }}
+          username: ${{ secrets.ECS_USER }}
+          port: ${{ secrets.ECS_PORT }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          source: "deploy/docker-compose.yml"
+          target: "/opt/goodface-interview/"
+          strip_components: 1
+          overwrite: true
+
       - name: Deploy to ECS-1 (47.99.32.144)
-        run: |
-          scp -o StrictHostKeyChecking=no deploy/docker-compose.yml ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST_1 }}:/opt/goodface-interview/
-          ssh -o StrictHostKeyChecking=no ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST_1 }} << EOF
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.ECS_HOST_1 }}
+          username: ${{ secrets.ECS_USER }}
+          port: ${{ secrets.ECS_PORT }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          script: |
             set -e
+            mkdir -p /opt/goodface-interview
             cd /opt/goodface-interview
 
-            # Create .env file with all configurations
-            cat > .env << 'ENV_EOF'
-ACR_REGISTRY=${{ secrets.ACR_REGISTRY }}
-ACR_NAMESPACE=${{ secrets.ACR_NAMESPACE }}
-IMAGE_TAG=${GITHUB_SHA::7}
-SPRING_PROFILES_ACTIVE=prod
-SPRING_DATASOURCE_URL=${{ secrets.SPRING_DATASOURCE_URL }}
-SPRING_DATASOURCE_USERNAME=${{ secrets.SPRING_DATASOURCE_USERNAME }}
-SPRING_DATASOURCE_PASSWORD=${{ secrets.SPRING_DATASOURCE_PASSWORD }}
-SPRING_REDIS_HOST=${{ secrets.SPRING_REDIS_HOST }}
-SPRING_REDIS_PORT=${{ secrets.SPRING_REDIS_PORT }}
-SPRING_REDIS_PASSWORD=${{ secrets.SPRING_REDIS_PASSWORD }}
-DUBBO_REGISTRY_ADDRESS=${{ secrets.DUBBO_REGISTRY_ADDRESS }}
-DUBBO_REGISTRY_NAMESPACE=${{ secrets.DUBBO_REGISTRY_NAMESPACE }}
-NACOS_USERNAME=${{ secrets.NACOS_USERNAME }}
-NACOS_PASSWORD=${{ secrets.NACOS_PASSWORD }}
-DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }}
-ENV_EOF
+            docker login ${{ secrets.ACR_REGISTRY }} -u '${{ secrets.ACR_USERNAME }}' -p '${{ secrets.ACR_PASSWORD }}'
 
-            # Login to ACR
-            echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ secrets.ACR_REGISTRY }}" -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+            # Generate .env from GitHub Secrets
+            echo "ACR_REGISTRY=${{ secrets.ACR_REGISTRY }}" > .env
+            echo "ACR_NAMESPACE=${{ secrets.ACR_NAMESPACE }}" >> .env
+            echo "IMAGE_TAG=${{ github.sha }}" >> .env
+            echo "SPRING_PROFILES_ACTIVE=prod" >> .env
+            echo "SPRING_DATASOURCE_URL=${{ secrets.SPRING_DATASOURCE_URL }}" >> .env
+            echo "SPRING_DATASOURCE_USERNAME=${{ secrets.SPRING_DATASOURCE_USERNAME }}" >> .env
+            echo "SPRING_DATASOURCE_PASSWORD=${{ secrets.SPRING_DATASOURCE_PASSWORD }}" >> .env
+            echo "SPRING_REDIS_HOST=${{ secrets.SPRING_REDIS_HOST }}" >> .env
+            echo "SPRING_REDIS_PORT=${{ secrets.SPRING_REDIS_PORT }}" >> .env
+            echo "SPRING_REDIS_PASSWORD=${{ secrets.SPRING_REDIS_PASSWORD }}" >> .env
+            echo "DUBBO_REGISTRY_ADDRESS=${{ secrets.DUBBO_REGISTRY_ADDRESS }}" >> .env
+            echo "DUBBO_REGISTRY_NAMESPACE=${{ secrets.DUBBO_REGISTRY_NAMESPACE }}" >> .env
+            echo "NACOS_USERNAME=${{ secrets.NACOS_USERNAME }}" >> .env
+            echo "NACOS_PASSWORD=${{ secrets.NACOS_PASSWORD }}" >> .env
+            echo "DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }}" >> .env
 
-            # Pull and start latest image
             docker compose --env-file .env pull
             docker compose --env-file .env up -d --remove-orphans
 
-            # Ensure unified network exists and attach container
-            docker network ls | grep -q goodface-net || docker network create goodface-net
+            docker network create goodface-net || true
             docker network connect goodface-net goodface-interview || true
 
             echo "✅ ECS-1 deployment completed"
-          EOF
 
   deploy-ecs2:
     needs: docker
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.5.1
+
+      - name: Copy docker-compose to ECS-2
+        uses: appleboy/scp-action@v0.1.7
         with:
-          ssh-private-key: ${{ secrets.ECS_SSH_KEY_2 }}
+          host: ${{ secrets.ECS_HOST_2 }}
+          username: ${{ secrets.ECS_USER }}
+          port: ${{ secrets.ECS_PORT }}
+          key: ${{ secrets.ECS_SSH_KEY_2 }}
+          source: "deploy/docker-compose.yml"
+          target: "/opt/goodface-interview/"
+          strip_components: 1
+          overwrite: true
+
       - name: Deploy to ECS-2 (47.114.90.156)
-        run: |
-          scp -o StrictHostKeyChecking=no deploy/docker-compose.yml ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST_2 }}:/opt/goodface-interview/
-          ssh -o StrictHostKeyChecking=no ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST_2 }} << EOF
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.ECS_HOST_2 }}
+          username: ${{ secrets.ECS_USER }}
+          port: ${{ secrets.ECS_PORT }}
+          key: ${{ secrets.ECS_SSH_KEY_2 }}
+          script: |
             set -e
+            mkdir -p /opt/goodface-interview
             cd /opt/goodface-interview
 
-            # Create .env file with all configurations
-            cat > .env << 'ENV_EOF'
-ACR_REGISTRY=${{ secrets.ACR_REGISTRY }}
-ACR_NAMESPACE=${{ secrets.ACR_NAMESPACE }}
-IMAGE_TAG=${GITHUB_SHA::7}
-SPRING_PROFILES_ACTIVE=prod
-SPRING_DATASOURCE_URL=${{ secrets.SPRING_DATASOURCE_URL }}
-SPRING_DATASOURCE_USERNAME=${{ secrets.SPRING_DATASOURCE_USERNAME }}
-SPRING_DATASOURCE_PASSWORD=${{ secrets.SPRING_DATASOURCE_PASSWORD }}
-SPRING_REDIS_HOST=${{ secrets.SPRING_REDIS_HOST }}
-SPRING_REDIS_PORT=${{ secrets.SPRING_REDIS_PORT }}
-SPRING_REDIS_PASSWORD=${{ secrets.SPRING_REDIS_PASSWORD }}
-DUBBO_REGISTRY_ADDRESS=${{ secrets.DUBBO_REGISTRY_ADDRESS }}
-DUBBO_REGISTRY_NAMESPACE=${{ secrets.DUBBO_REGISTRY_NAMESPACE }}
-NACOS_USERNAME=${{ secrets.NACOS_USERNAME }}
-NACOS_PASSWORD=${{ secrets.NACOS_PASSWORD }}
-DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }}
-ENV_EOF
+            docker login ${{ secrets.ACR_REGISTRY }} -u '${{ secrets.ACR_USERNAME }}' -p '${{ secrets.ACR_PASSWORD }}'
 
-            # Login to ACR
-            echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ secrets.ACR_REGISTRY }}" -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+            # Generate .env from GitHub Secrets
+            echo "ACR_REGISTRY=${{ secrets.ACR_REGISTRY }}" > .env
+            echo "ACR_NAMESPACE=${{ secrets.ACR_NAMESPACE }}" >> .env
+            echo "IMAGE_TAG=${{ github.sha }}" >> .env
+            echo "SPRING_PROFILES_ACTIVE=prod" >> .env
+            echo "SPRING_DATASOURCE_URL=${{ secrets.SPRING_DATASOURCE_URL }}" >> .env
+            echo "SPRING_DATASOURCE_USERNAME=${{ secrets.SPRING_DATASOURCE_USERNAME }}" >> .env
+            echo "SPRING_DATASOURCE_PASSWORD=${{ secrets.SPRING_DATASOURCE_PASSWORD }}" >> .env
+            echo "SPRING_REDIS_HOST=${{ secrets.SPRING_REDIS_HOST }}" >> .env
+            echo "SPRING_REDIS_PORT=${{ secrets.SPRING_REDIS_PORT }}" >> .env
+            echo "SPRING_REDIS_PASSWORD=${{ secrets.SPRING_REDIS_PASSWORD }}" >> .env
+            echo "DUBBO_REGISTRY_ADDRESS=${{ secrets.DUBBO_REGISTRY_ADDRESS }}" >> .env
+            echo "DUBBO_REGISTRY_NAMESPACE=${{ secrets.DUBBO_REGISTRY_NAMESPACE }}" >> .env
+            echo "NACOS_USERNAME=${{ secrets.NACOS_USERNAME }}" >> .env
+            echo "NACOS_PASSWORD=${{ secrets.NACOS_PASSWORD }}" >> .env
+            echo "DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }}" >> .env
 
-            # Pull and start latest image
             docker compose --env-file .env pull
             docker compose --env-file .env up -d --remove-orphans
 
-            # Ensure unified network exists and attach container
-            docker network ls | grep -q goodface-net || docker network create goodface-net
+            docker network create goodface-net || true
             docker network connect goodface-net goodface-interview || true
 
             echo "✅ ECS-2 deployment completed"
-          EOF
 
   health-check:
     needs: [deploy-ecs1, deploy-ecs2]
