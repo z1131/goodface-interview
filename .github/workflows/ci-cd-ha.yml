@@ -74,12 +74,12 @@ jobs:
       - name: Deploy to ECS-1 (47.99.32.144)
         run: |
           scp -o StrictHostKeyChecking=no deploy/docker-compose.yml ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST_1 }}:/opt/goodface-interview/
-          ssh -o StrictHostKeyChecking=no ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST_1 }} << 'EOF'
+          ssh -o StrictHostKeyChecking=no ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST_1 }} << EOF
             set -e
             cd /opt/goodface-interview
 
             # Create .env file with all configurations
-            cat > .env << ENV_EOF
+            cat > .env << 'ENV_EOF'
 ACR_REGISTRY=${{ secrets.ACR_REGISTRY }}
 ACR_NAMESPACE=${{ secrets.ACR_NAMESPACE }}
 IMAGE_TAG=${GITHUB_SHA::7}
@@ -123,12 +123,12 @@ ENV_EOF
       - name: Deploy to ECS-2 (47.114.90.156)
         run: |
           scp -o StrictHostKeyChecking=no deploy/docker-compose.yml ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST_2 }}:/opt/goodface-interview/
-          ssh -o StrictHostKeyChecking=no ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST_2 }} << 'EOF'
+          ssh -o StrictHostKeyChecking=no ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST_2 }} << EOF
             set -e
             cd /opt/goodface-interview
 
             # Create .env file with all configurations
-            cat > .env << ENV_EOF
+            cat > .env << 'ENV_EOF'
 ACR_REGISTRY=${{ secrets.ACR_REGISTRY }}
 ACR_NAMESPACE=${{ secrets.ACR_NAMESPACE }}
 IMAGE_TAG=${GITHUB_SHA::7}
