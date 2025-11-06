@@ -132,7 +132,7 @@ jobs:
 
   deploy-ecs2:
     needs: docker
-    if: needs.docker.result == 'success' && false  # Temporarily disabled - ECS2 needs Docker and SSH setup
+    if: needs.docker.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
