@@ -132,7 +132,7 @@ jobs:
 
   deploy-ecs2:
     needs: docker
-    if: needs.docker.result == 'success' && false  # Temporarily disabled due to SSH key issues
+    if: needs.docker.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -148,6 +148,8 @@ jobs:
           target: "/opt/goodface-interview/"
           strip_components: 1
           overwrite: true
+          timeout: 300s
+          command_timeout: 60s
 
       - name: Deploy to ECS-2 (47.114.90.156)
         uses: appleboy/ssh-action@v0.1.7
@@ -156,6 +158,8 @@ jobs:
           username: ${{ secrets.ECS_USER }}
           port: ${{ secrets.ECS_PORT }}
           key: ${{ secrets.ECS_SSH_KEY_2 }}
+          timeout: 300s
+          command_timeout: 300s
           script: |
             set -e
             mkdir -p /opt/goodface-interview
