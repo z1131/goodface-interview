@@ -150,6 +150,7 @@ jobs:
           overwrite: true
           timeout: 300s
           command_timeout: 60s
+          debug: true
 
       - name: Deploy to ECS-2 (47.114.90.156)
         uses: appleboy/ssh-action@v0.1.7
@@ -160,6 +161,7 @@ jobs:
           key: ${{ secrets.ECS_SSH_KEY_2 }}
           timeout: 300s
           command_timeout: 300s
+          debug: true
           script: |
             set -e
             mkdir -p /opt/goodface-interview
