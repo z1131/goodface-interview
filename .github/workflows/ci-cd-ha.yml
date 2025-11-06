@@ -69,6 +69,7 @@ jobs:
 
   deploy-ecs1:
     needs: docker
+    if: needs.docker.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -116,7 +117,12 @@ jobs:
             echo "NACOS_PASSWORD=${{ secrets.NACOS_PASSWORD }}" >> .env
             echo "DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }}" >> .env
 
-            docker compose --env-file .env pull
+            # Try to pull the specific image tag, fallback to latest if not found
+            if ! docker compose --env-file .env pull; then
+              echo "⚠️  Failed to pull image ${{ github.sha }}, falling back to latest"
+              echo "IMAGE_TAG=latest" > .env
+              docker compose --env-file .env pull
+            fi
             docker compose --env-file .env up -d --remove-orphans
 
             docker network create goodface-net || true
@@ -126,6 +132,7 @@ jobs:
 
   deploy-ecs2:
     needs: docker
+    if: needs.docker.result == 'success' && false  # Temporarily disabled due to SSH key issues
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -173,7 +180,12 @@ jobs:
             echo "NACOS_PASSWORD=${{ secrets.NACOS_PASSWORD }}" >> .env
             echo "DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }}" >> .env
 
-            docker compose --env-file .env pull
+            # Try to pull the specific image tag, fallback to latest if not found
+            if ! docker compose --env-file .env pull; then
+              echo "⚠️  Failed to pull image ${{ github.sha }}, falling back to latest"
+              echo "IMAGE_TAG=latest" > .env
+              docker compose --env-file .env pull
+            fi
             docker compose --env-file .env up -d --remove-orphans
 
             docker network create goodface-net || true
