@@ -113,8 +113,6 @@ jobs:
             echo "SPRING_REDIS_PASSWORD=${{ secrets.SPRING_REDIS_PASSWORD }}" >> .env
             echo "DUBBO_REGISTRY_ADDRESS=${{ secrets.DUBBO_REGISTRY_ADDRESS }}" >> .env
             echo "DUBBO_REGISTRY_NAMESPACE=${{ secrets.DUBBO_REGISTRY_NAMESPACE }}" >> .env
-            echo "NACOS_USERNAME=${{ secrets.NACOS_USERNAME }}" >> .env
-            echo "NACOS_PASSWORD=${{ secrets.NACOS_PASSWORD }}" >> .env
             echo "DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }}" >> .env
 
             # Try to pull the specific image tag, fallback to latest if not found
@@ -182,8 +180,6 @@ jobs:
             echo "SPRING_REDIS_PASSWORD=${{ secrets.SPRING_REDIS_PASSWORD }}" >> .env
             echo "DUBBO_REGISTRY_ADDRESS=${{ secrets.DUBBO_REGISTRY_ADDRESS }}" >> .env
             echo "DUBBO_REGISTRY_NAMESPACE=${{ secrets.DUBBO_REGISTRY_NAMESPACE }}" >> .env
-            echo "NACOS_USERNAME=${{ secrets.NACOS_USERNAME }}" >> .env
-            echo "NACOS_PASSWORD=${{ secrets.NACOS_PASSWORD }}" >> .env
             echo "DASHSCOPE_API_KEY=${{ secrets.DASHSCOPE_API_KEY }}" >> .env
 
             # Try to pull the specific image tag, fallback to latest if not found

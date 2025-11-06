@@ -45,8 +45,6 @@ dubbo:
     check: false
     parameters:
       namespace: ${DUBBO_REGISTRY_NAMESPACE:65bc510a-166c-4a63-aad8-72fc931b14b7}
-      username: ${NACOS_USERNAME:nacos}
-      password: ${NACOS_PASSWORD:}
   config-center:
     check: false
   scan:
