@@ -30,8 +30,13 @@ jobs:
   docker:
     needs: ci
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.short_sha.outputs.sha_short }}
     steps:
       - uses: actions/checkout@v3
+      - name: Get full SHA
+        id: short_sha
+        run: echo "sha_short=${{ github.sha }}" >> $GITHUB_OUTPUT
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
       - name: Set up Docker Buildx
@@ -48,7 +53,7 @@ jobs:
         with:
           images: ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/goodface-interview
           tags: |
-            type=sha,prefix=,suffix=,format=short
+            type=sha
             type=raw,value=latest
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
