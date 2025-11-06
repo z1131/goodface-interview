@@ -53,7 +53,7 @@ jobs:
         with:
           images: ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/goodface-interview
           tags: |
-            type=sha
+            type=raw,value={{sha}}
             type=raw,value=latest
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
